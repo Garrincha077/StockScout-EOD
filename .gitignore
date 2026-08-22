@@ -1,0 +1,61 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Node / browser tests
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+playwright/.cache/
+
+# Runtime market/scan data -- never commit
+data/
+reports/
+reports_benchmark/
+artifacts/
+cache/
+market-cache/
+*.duckdb
+*.duckdb.*
+*.db
+*.sqlite*
+*.parquet
+*.arrow
+*.feather
+*.csv.gz
+frontend/public/data/
+frontend/public/private-charts/
+
+# Local personal state
+alerts.json
+drawings.json
+watchlists.json
+delivery_state.json
+
+# Tooling / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+coverage/
+tmp/
+

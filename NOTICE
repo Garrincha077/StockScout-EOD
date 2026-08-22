@@ -1,0 +1,10 @@
+StockScout-EOD combines independently developed StockScout components with
+selected patterns derived from Ryan Hamby's stock-screener project.
+
+Portions derived from RyanJHamby/stock-screener:
+Copyright (c) 2024 Ryan Hamby
+Licensed under the MIT License.
+
+Ryan/LEGACY methodology is preserved as a read-only confirmation layer. It
+does not alter StockScout's default scoring or ranking.
+
