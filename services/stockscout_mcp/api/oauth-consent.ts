@@ -1,6 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import {
-  createHmac,
+  createCipheriv,
+  createDecipheriv,
+  createHash,
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
@@ -23,6 +25,9 @@ interface StoredSession {
 
 const SESSION_COOKIE = "__Host-stockscout_oauth";
 const CSRF_COOKIE = "__Host-stockscout_csrf";
+const SESSION_COOKIE_VERSION = "v1";
+const SESSION_COOKIE_NONCE_BYTES = 12;
+const SESSION_COOKIE_TAG_BYTES = 16;
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name]?.trim();
@@ -38,30 +43,68 @@ function cookieSecret(): string {
   return value;
 }
 
-function signature(value: string): string {
-  return createHmac("sha256", cookieSecret()).update(value).digest("base64url");
+function sessionCookieKey(): Buffer {
+  return createHash("sha256")
+    .update("StockScout OAuth session cookie v1\0", "utf8")
+    .update(cookieSecret(), "utf8")
+    .digest();
 }
 
-function seal(value: object): string {
-  const payload = Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
-  return `${payload}.${signature(payload)}`;
+function decodeBase64Url(value: string): Buffer | null {
+  if (!value || !/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  const decoded = Buffer.from(value, "base64url");
+  return decoded.toString("base64url") === value ? decoded : null;
 }
 
-function unseal<T>(value: string | undefined): T | null {
+export function sealSessionCookie(value: object): string {
+  const nonce = randomBytes(SESSION_COOKIE_NONCE_BYTES);
+  const cipher = createCipheriv("aes-256-gcm", sessionCookieKey(), nonce, {
+    authTagLength: SESSION_COOKIE_TAG_BYTES,
+  });
+  cipher.setAAD(Buffer.from(SESSION_COOKIE_VERSION, "utf8"));
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(value), "utf8"),
+    cipher.final(),
+  ]);
+  const tag = cipher.getAuthTag();
+  return [
+    SESSION_COOKIE_VERSION,
+    nonce.toString("base64url"),
+    ciphertext.toString("base64url"),
+    tag.toString("base64url"),
+  ].join(".");
+}
+
+export function unsealSessionCookie<T>(value: string | undefined): T | null {
   if (!value) return null;
-  const [payload, provided] = value.split(".");
-  if (!payload || !provided) return null;
-  const expected = signature(payload);
-  const providedBuffer = Buffer.from(provided);
-  const expectedBuffer = Buffer.from(expected);
+  const parts = value.split(".");
+  if (parts.length !== 4 || parts[0] !== SESSION_COOKIE_VERSION) return null;
+
+  const nonce = decodeBase64Url(parts[1] ?? "");
+  const ciphertext = decodeBase64Url(parts[2] ?? "");
+  const tag = decodeBase64Url(parts[3] ?? "");
   if (
-    providedBuffer.length !== expectedBuffer.length ||
-    !timingSafeEqual(providedBuffer, expectedBuffer)
+    nonce?.length !== SESSION_COOKIE_NONCE_BYTES ||
+    !ciphertext?.length ||
+    tag?.length !== SESSION_COOKIE_TAG_BYTES
   ) {
     return null;
   }
+
+  // Derive this outside the parsing catch so server misconfiguration remains
+  // a hard failure rather than looking like an expired browser session.
+  const key = sessionCookieKey();
   try {
-    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as T;
+    const decipher = createDecipheriv("aes-256-gcm", key, nonce, {
+      authTagLength: SESSION_COOKIE_TAG_BYTES,
+    });
+    decipher.setAAD(Buffer.from(SESSION_COOKIE_VERSION, "utf8"));
+    decipher.setAuthTag(tag);
+    const plaintext = Buffer.concat([
+      decipher.update(ciphertext),
+      decipher.final(),
+    ]);
+    return JSON.parse(plaintext.toString("utf8")) as T;
   } catch {
     return null;
   }
@@ -228,7 +271,9 @@ export default async function handler(
   }
   const requestCookies = cookies(request);
   const csrf = requestCookies[CSRF_COOKIE] ?? randomBytes(24).toString("base64url");
-  const storedSession = unseal<StoredSession>(requestCookies[SESSION_COOKIE]);
+  const storedSession = unsealSessionCookie<StoredSession>(
+    requestCookies[SESSION_COOKIE],
+  );
   const supabase = client();
 
   if (request.method === "POST" && !csrfIsValid(body, requestCookies)) {
@@ -249,7 +294,7 @@ export default async function handler(
     response.setHeader("Set-Cookie", [
       cookie(
         SESSION_COOKIE,
-        seal({
+        sealSessionCookie({
           access_token: data.session.access_token,
           refresh_token: data.session.refresh_token,
         }),
@@ -330,7 +375,7 @@ export default async function handler(
   response.setHeader("Set-Cookie", [
     cookie(
       SESSION_COOKIE,
-      seal({
+      sealSessionCookie({
         access_token: sessionData.session.access_token,
         refresh_token: sessionData.session.refresh_token,
       }),

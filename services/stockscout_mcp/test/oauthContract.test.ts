@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  sealSessionCookie,
+  unsealSessionCookie,
+} from "../api/oauth-consent.js";
 import { requirePublishableSupabaseKey } from "../src/auth.js";
 
 import {
@@ -92,4 +96,45 @@ test("MCP rejects secret and service-role Supabase keys", () => {
     () => requirePublishableSupabaseKey(keyJwt("service_role")),
     /secret\/service-role/,
   );
+});
+
+test("OAuth session cookies are encrypted and reject tampering", () => {
+  const previousSecret = process.env.MCP_CONSENT_COOKIE_SECRET;
+  const session = {
+    access_token: "owner-access-token",
+    refresh_token: "owner-refresh-token",
+  };
+  try {
+    process.env.MCP_CONSENT_COOKIE_SECRET =
+      "test-only-cookie-secret-with-at-least-32-bytes";
+
+    const sealed = sealSessionCookie(session);
+    const secondSealed = sealSessionCookie(session);
+    assert.match(sealed, /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+    assert.notEqual(sealed, secondSealed, "each cookie must use a fresh nonce");
+    assert.deepEqual(unsealSessionCookie(sealed), session);
+
+    const [, , ciphertext = "", tag = ""] = sealed.split(".");
+    assert.notEqual(
+      Buffer.from(ciphertext, "base64url").toString("utf8"),
+      JSON.stringify(session),
+      "session JSON must not be readable from the cookie payload",
+    );
+
+    const tamperedTag = `${tag.startsWith("A") ? "B" : "A"}${tag.slice(1)}`;
+    const tampered = sealed.replace(new RegExp(`${tag}$`), tamperedTag);
+    assert.equal(unsealSessionCookie(tampered), null);
+    assert.equal(unsealSessionCookie("legacy-payload.legacy-signature"), null);
+    assert.equal(unsealSessionCookie(undefined), null);
+
+    process.env.MCP_CONSENT_COOKIE_SECRET =
+      "different-test-cookie-secret-with-at-least-32-bytes";
+    assert.equal(unsealSessionCookie(sealed), null);
+  } finally {
+    if (previousSecret === undefined) {
+      delete process.env.MCP_CONSENT_COOKIE_SECRET;
+    } else {
+      process.env.MCP_CONSENT_COOKIE_SECRET = previousSecret;
+    }
+  }
 });

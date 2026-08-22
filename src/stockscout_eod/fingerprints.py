@@ -6,6 +6,11 @@ from pathlib import Path
 import stock_scout
 
 
+def _canonical_source_bytes(path: Path) -> bytes:
+    """Return source bytes with platform line endings normalized to LF."""
+    return path.read_bytes().replace(b"\r\n", b"\n")
+
+
 def tree_fingerprint(relative: str = "") -> str:
     root = Path(stock_scout.__file__).resolve().parent / relative
     digest = hashlib.sha256()
@@ -14,7 +19,7 @@ def tree_fingerprint(relative: str = "") -> str:
     for path in files:
         digest.update(path.relative_to(base).as_posix().encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        digest.update(_canonical_source_bytes(path))
         digest.update(b"\0")
     return digest.hexdigest()
 

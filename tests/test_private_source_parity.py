@@ -8,6 +8,10 @@ from pathlib import Path
 import pytest
 
 
+def _canonical_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def test_allowlisted_sources_still_match_private_workspace() -> None:
     private_root_value = os.environ.get("STOCKSCOUT_PRIVATE_ROOT")
     if not private_root_value:
@@ -23,8 +27,8 @@ def test_allowlisted_sources_still_match_private_workspace() -> None:
     mismatches: list[str] = []
     for relative, record in snapshot["frozenFiles"].items():
         expected = record["sha256"]
-        public_hash = hashlib.sha256((public_engine / relative).read_bytes()).hexdigest()
-        private_hash = hashlib.sha256((private_engine / relative).read_bytes()).hexdigest()
+        public_hash = _canonical_sha256(public_engine / relative)
+        private_hash = _canonical_sha256(private_engine / relative)
         if public_hash != expected or private_hash != expected:
             mismatches.append(
                 f"{relative} ({record['source']}): public={public_hash} private={private_hash} expected={expected}"

@@ -88,3 +88,17 @@
   reported zero vulnerabilities. Supabase advisors show no new EOD security
   warning and the new scan-state FK warning is resolved; unrelated
   legacy-project notices remain out of scope.
+
+## 2026-08-22 — Cross-platform and OAuth CI hardening
+
+- Canonicalized frozen-source fingerprints to LF so the same allowlisted engine
+  hashes verify on Windows and Linux without changing scanner source or logic.
+- Made the credential-history scan fetch the complete Git history on pull
+  requests, preserving the repository-wide secret boundary.
+- Replaced the readable signed OAuth session cookie with versioned AES-256-GCM
+  authenticated encryption. Fresh nonces, authenticated version metadata and
+  strict parsing reject tampered, legacy, malformed and wrong-key cookies.
+- Verification: Python 125 passed/2 intentionally skipped, frontend 46 tests
+  and production build passed, and MCP 14 passed including the new cookie
+  confidentiality/tamper regression. The hosted CI and CodeQL rerun remain the
+  final merge gate.
