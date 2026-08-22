@@ -1,0 +1,16 @@
+{
+  "name": "StockScout EOD",
+  "short_name": "StockScout",
+  "description": "Mobile-first end-of-day US market scan and setup review.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#07111d",
+  "theme_color": "#08111f",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    {"src": "./icons/stockscout.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
+  ]
+}

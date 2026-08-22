@@ -1,0 +1,22 @@
+{
+  "wrapper": {
+    "ticker": "AAPL",
+    "source": "candidate",
+    "scanOrder": 7,
+    "record": {
+      "ticker": "AAPL",
+      "price": 10.0,
+      "nested": {
+        "z": true,
+        "a": "č"
+      }
+    },
+    "summary": {
+      "score": 1.0,
+      "tags": ["RWB", "base"],
+      "nullable": null
+    }
+  },
+  "canonical": "{\"record\":{\"nested\":{\"a\":\"č\",\"z\":true},\"price\":10,\"ticker\":\"AAPL\"},\"scanOrder\":7,\"source\":\"candidate\",\"summary\":{\"nullable\":null,\"score\":1,\"tags\":[\"RWB\",\"base\"]},\"ticker\":\"AAPL\"}",
+  "sha256": "db90d8f461f96c29a43eebcd8684922b992c686d675a3245a7ea721e82ca3fe7"
+}

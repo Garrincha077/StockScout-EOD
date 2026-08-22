@@ -15,6 +15,7 @@ __pycache__/
 .mypy_cache/
 .venv/
 venv/
+.staging/
 dist/
 build/
 *.egg-info/
@@ -28,12 +29,14 @@ frontend/playwright-report/
 playwright/.cache/
 
 # Runtime market/scan data -- never commit
-data/
-reports/
-reports_benchmark/
-artifacts/
-cache/
-market-cache/
+/data/
+/reports/
+/reports_benchmark/
+/artifacts/
+/cache/
+/market-cache/
+/cloud-payload/
+/diagnostic/
 *.duckdb
 *.duckdb.*
 *.db
@@ -56,6 +59,7 @@ delivery_state.json
 Thumbs.db
 .idea/
 .vscode/
+.vercel/
 coverage/
-tmp/
-
+/tmp/
+supabase/.temp/
