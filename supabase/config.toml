@@ -1,0 +1,4 @@
+[functions.stockscout-eod-publish]
+# GitHub sends its own OIDC JWT, not a Supabase Auth JWT. The function verifies
+# issuer, audience, repository, protected ref, workflow, and environment itself.
+verify_jwt = false
