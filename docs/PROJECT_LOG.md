@@ -174,3 +174,19 @@
   implementation share a scoped 60-second fail-safe; the project-wide role
   timeout is unchanged. No scan, ranking, detector, trade-plan, public record or
   search semantics changed. Exact production activation remains the final gate.
+
+## 2026-08-24 — Active ChatGPT snapshot and complete field allowlist lookup
+
+- The exact notification-disabled publish retry activated all 2,224 records for
+  `2026-08-21-eod-32755523760-1`; alert evaluation and cleanup passed, while
+  Telegram remained intentionally disabled. Database cardinality, health,
+  records hash and removal of the completed staging upload were verified.
+- The first authenticated production MCP smoke test then exposed stale Vercel
+  code that still selected the now-unexposed `public` API schema. Redeploying
+  current `main` restored ticker, full-text and exact `entry_ready` screening.
+- A real RWB query found a second boundary case: the active field catalog has
+  1,145 paths, while screening fetched an arbitrary first 1,000 before checking
+  requested paths. Screening now asks the allowlisted catalog only for its at
+  most 23 explicitly referenced filter/sort fields. This keeps arbitrary JSON
+  paths rejected and does not alter records, setup logic, ranking or search
+  semantics.

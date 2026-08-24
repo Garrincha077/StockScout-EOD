@@ -241,14 +241,28 @@ export class SupabaseEodDataSource implements EodDataSource {
     sorts: ScanSort[],
     limit: number,
   ): Promise<JsonRecord[]> {
-    const { data: fieldRows, error: fieldError } = await this.database
-      .schema("stockscout_api")
-      .from("eod_latest_fields")
-      .select("field_path,scalar_types")
-      .limit(1000);
-    if (fieldError) throw new Error(`EOD field allowlist lookup failed: ${fieldError.message}`);
+    const requestedFields = [
+      ...new Set(
+        [...filters, ...sorts]
+          .map((item) => item.field)
+          .filter((field) => !Object.hasOwn(EXTRACTED_FIELD_KINDS, field)),
+      ),
+    ];
+    let fieldRows: JsonRecord[] = [];
+    if (requestedFields.length > 0) {
+      const { data, error } = await this.database
+        .schema("stockscout_api")
+        .from("eod_latest_fields")
+        .select("field_path,scalar_types")
+        .in("field_path", requestedFields)
+        .limit(requestedFields.length);
+      if (error) {
+        throw new Error(`EOD field allowlist lookup failed: ${error.message}`);
+      }
+      fieldRows = records(data);
+    }
     const allowedKinds = new Map<string, ScalarKind>(Object.entries(EXTRACTED_FIELD_KINDS));
-    for (const item of records(fieldRows)) {
+    for (const item of fieldRows) {
       allowedKinds.set(String(item.field_path), scalarKind(item.scalar_types));
     }
     assertAllowedFields([...filters, ...sorts], allowedKinds);
