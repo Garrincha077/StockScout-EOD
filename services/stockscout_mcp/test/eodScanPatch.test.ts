@@ -186,11 +186,21 @@ test("Supabase screening emits typed nested PostgREST filters", async () => {
   );
   const candidateRequest = requests.find((request) =>
     new URL(request.url).pathname.endsWith("/eod_latest_candidates"));
+  const fieldRequest = requests.find((request) =>
+    new URL(request.url).pathname.endsWith("/eod_latest_fields")
+  );
   assert.ok(candidateRequest);
+  assert.ok(fieldRequest);
   const candidateUrl = new URL(candidateRequest.url);
+  const fieldUrl = new URL(fieldRequest.url);
   assert.ok(requests.length >= 2);
   assert.ok(requests.every((request) =>
     request.headers.get("Accept-Profile") === "stockscout_api"));
+  assert.equal(fieldUrl.searchParams.get("limit"), "3");
+  const requestedFields = String(fieldUrl.searchParams.get("field_path"));
+  assert.match(requestedFields, /setups\.rwb_squeeze_thrust\.state/);
+  assert.match(requestedFields, /setups\.rwb_squeeze_thrust\.bundle_width_pct/);
+  assert.match(requestedFields, /setups\.rwb_squeeze_thrust\.triggered/);
   assert.equal(
     candidateUrl.searchParams.get("record->setups->rwb_squeeze_thrust->>state"),
     "neq.pending",
