@@ -1,4 +1,5 @@
 const PUBLISHABLE_KEY=/^sb_publishable_[A-Za-z0-9._-]{16,}$/
+export const OWNER_DATA_SCHEMA='stockscout_api'
 
 function jwtRole(value:string){
   const payload=value.split('.')[1]

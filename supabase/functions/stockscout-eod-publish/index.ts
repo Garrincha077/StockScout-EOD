@@ -15,6 +15,7 @@ import {
   type JsonRecord as AlertJsonRecord,
   type OwnerAlert,
 } from "./alerts.ts";
+import { EDGE_API_SCHEMA, lookupSingleOwner } from "./database.ts";
 
 const AUDIENCE = "stockscout-eod-publish";
 const ISSUER = "https://token.actions.githubusercontent.com";
@@ -541,12 +542,9 @@ async function evaluateAlerts(
   const insertedEvents: AlertJsonRecord[] = [];
   for (let offset = 0; offset < pendingEvents.length; offset += 500) {
     const response = await database
-      .from("eod_alert_events")
-      .upsert(pendingEvents.slice(offset, offset + 500), {
-        onConflict: "user_id,event_key",
-        ignoreDuplicates: true,
-      })
-      .select("id,alert_id,run_id,event_key,payload,created_at");
+      .rpc("eod_upsert_alert_events", {
+        p_events: pendingEvents.slice(offset, offset + 500),
+      });
     if (response.error) {
       throw new Error(`alert event insert failed: ${response.error.message}`);
     }
@@ -591,16 +589,12 @@ Deno.serve(async (request: Request) => {
     const database = createClient(
       requiredEnv("SUPABASE_URL"),
       requiredEnv("SUPABASE_SERVICE_ROLE_KEY"),
-      { auth: { persistSession: false, autoRefreshToken: false } },
+      {
+        db: { schema: EDGE_API_SCHEMA },
+        auth: { persistSession: false, autoRefreshToken: false },
+      },
     );
-    const ownerResponse = await database.rpc("eod_single_owner_id");
-    if (ownerResponse.error) {
-      throw new Error(`owner lookup failed: ${ownerResponse.error.message}`);
-    }
-    const ownerId = String(ownerResponse.data ?? "");
-    if (!/^[0-9a-f-]{36}$/i.test(ownerId)) {
-      throw new Error("owner lookup returned an invalid UUID");
-    }
+    const ownerId = await lookupSingleOwner(database);
     let data: unknown;
 
     if (action === "begin") {

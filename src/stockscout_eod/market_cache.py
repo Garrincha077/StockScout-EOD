@@ -244,7 +244,8 @@ def restore_market_cache(
     try:
         manifest = json.loads(gzip.decompress(_download_cache_blob(endpoint, bearer, "manifest")))
     except Exception as exc:  # cold bootstrap is an expected first-run state
-        if "market cache lookup failed" in str(exc) or "not found" in str(exc).lower():
+        message = str(exc).lower()
+        if "not found" in message or "http 404" in message:
             return None
         raise
     if manifest.get("schemaVersion") != "stockscout-eod/market-cache-v1":

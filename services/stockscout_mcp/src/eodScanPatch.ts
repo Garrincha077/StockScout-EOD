@@ -186,6 +186,7 @@ export class SupabaseEodDataSource implements EodDataSource {
 
   async latestScan(): Promise<JsonRecord | null> {
     const { data, error } = await this.database
+      .schema("stockscout_api")
       .from("eod_latest_scan")
       .select("*")
       .maybeSingle();
@@ -196,6 +197,7 @@ export class SupabaseEodDataSource implements EodDataSource {
 
   async searchLatest(query: string, limit: number): Promise<JsonRecord[]> {
     const { data, error } = await this.database
+      .schema("stockscout_api")
       .from("eod_latest_candidates")
       .select(
         "document_id,ticker,source,scan_order,trade_status,primary_setup,risk_level,run_id,scan_date,market_data_date,health_status,published_at",
@@ -209,6 +211,7 @@ export class SupabaseEodDataSource implements EodDataSource {
 
   async fetchLatest(documentId: string): Promise<JsonRecord | null> {
     const { data, error } = await this.database
+      .schema("stockscout_api")
       .from("eod_latest_candidates")
       .select("*")
       .eq("document_id", documentId)
@@ -220,6 +223,7 @@ export class SupabaseEodDataSource implements EodDataSource {
 
   async describeLatestFields(query = ""): Promise<JsonRecord[]> {
     let request = this.database
+      .schema("stockscout_api")
       .from("eod_latest_fields")
       .select(
         "run_id,scan_date,market_data_date,health_status,published_at,field_path,scalar_types,populated_count,example",
@@ -238,6 +242,7 @@ export class SupabaseEodDataSource implements EodDataSource {
     limit: number,
   ): Promise<JsonRecord[]> {
     const { data: fieldRows, error: fieldError } = await this.database
+      .schema("stockscout_api")
       .from("eod_latest_fields")
       .select("field_path,scalar_types")
       .limit(1000);
@@ -249,6 +254,7 @@ export class SupabaseEodDataSource implements EodDataSource {
     assertAllowedFields([...filters, ...sorts], allowedKinds);
 
     let request = this.database
+      .schema("stockscout_api")
       .from("eod_latest_candidates")
       .select(
         "document_id,ticker,source,scan_order,trade_status,primary_setup,risk_level,scan_price,entry_risk_pct,ranking_score,record,run_id,scan_date,market_data_date,health_status,published_at",
@@ -296,6 +302,7 @@ export class SupabaseEodDataSource implements EodDataSource {
 
   async listScans(limit: number): Promise<JsonRecord[]> {
     const { data, error } = await this.database
+      .schema("stockscout_api")
       .from("eod_scan_history")
       .select("*")
       .order("scan_date", { ascending: false })
@@ -308,6 +315,7 @@ export class SupabaseEodDataSource implements EodDataSource {
 
   async findScans(runIds: string[]): Promise<JsonRecord[]> {
     const { data, error } = await this.database
+      .schema("stockscout_api")
       .from("eod_scans")
       .select("id,run_id,scan_date,market_data_date,health_status,records_hash")
       .in("run_id", runIds);
@@ -321,6 +329,7 @@ export class SupabaseEodDataSource implements EodDataSource {
     const pageSize = 1000;
     for (let offset = 0; offset < 10_000; offset += pageSize) {
       let request = this.database
+        .schema("stockscout_api")
         .from("eod_candidate_history")
         .select("*")
         .eq("scan_id", scanId)
