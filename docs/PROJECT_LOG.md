@@ -190,3 +190,7 @@
   most 23 explicitly referenced filter/sort fields. This keeps arbitrary JSON
   paths rejected and does not alter records, setup logic, ranking or search
   semantics.
+- The standalone natural-language term `RWB` now takes setup precedence instead
+  of also being parsed as a three-letter ticker. Zero-match search, describe and
+  screen responses resolve their context from the active scan history, so they
+  still report the correct dated health state rather than `legacy_snapshot`.

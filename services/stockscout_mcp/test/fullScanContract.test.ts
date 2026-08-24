@@ -215,6 +215,19 @@ test("search, fetch, describe and screen carry dated non-live context and PWA UR
     );
     assert.match(contentText(search), /2026-08-21.*healthy.*not live/i);
 
+    const rwbOnly = await client.callTool({
+      name: "search",
+      arguments: { query: "RWB" },
+    });
+    const rwbOutput = rwbOnly.structuredContent as {
+      scan: JsonRecord;
+      results: JsonRecord[];
+    };
+    assert.deepEqual(rwbOutput.results.map((row) => row.id), [
+      "scan:eod-2026-08-21:candidate:AAPL",
+    ]);
+    assert.equal(rwbOutput.scan.scan_date, "2026-08-21");
+
     const fetched = await client.callTool({
       name: "fetch",
       arguments: { id: "scan:eod-2026-08-21:candidate:AAPL" },
@@ -262,6 +275,21 @@ test("search, fetch, describe and screen carry dated non-live context and PWA UR
       (screenOutput.records[0]?.values as JsonRecord)["setups.rwb_squeeze_thrust.bundle_width_pct"],
       2.4,
     );
+
+    const emptyScreen = await client.callTool({
+      name: "screen_scan",
+      arguments: {
+        filters: [{ field: "ticker", op: "eq", value: "ZZZZZZ" }],
+      },
+    });
+    const emptyOutput = emptyScreen.structuredContent as {
+      scan: JsonRecord;
+      records: JsonRecord[];
+    };
+    assert.deepEqual(emptyOutput.records, []);
+    assert.equal(emptyOutput.scan.scan_date, "2026-08-21");
+    assert.equal(emptyOutput.scan.health_status, "healthy");
+    assert.match(contentText(emptyScreen), /2026-08-21.*healthy.*not live/i);
   } finally {
     await client.close();
     await server.close();

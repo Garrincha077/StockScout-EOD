@@ -68,6 +68,15 @@ function scanSummary(scan: EodJsonRecord): string {
   return `Scan ${date} is ${String(scan.health_status)}; prices are not live.`;
 }
 
+async function scanContextForRows(
+  repository: EodHistoryAccess,
+  rows: Record<string, unknown>[],
+): Promise<EodJsonRecord> {
+  if (rows[0]) return scanContext(rows[0]);
+  const latest = await repository.listEodScans(1);
+  return scanContext(latest[0]);
+}
+
 function documentResult(row: Record<string, unknown>) {
   const id = String(row.document_id);
   const ticker = String(row.ticker ?? "candidate");
@@ -117,12 +126,15 @@ export function createStockScoutServer(
     },
     async ({ query }) => {
       const filters: ScanFilter[] = [];
+      const asksForRwb = /\brwb\b/i.test(query);
       if (/\bentry[-_ ]ready\b/i.test(query)) filters.push({ field: "trade_plan.status", op: "eq", value: "entry_ready" });
       const risk = /(?:risk|rizik)[^0-9]{0,20}(?:<=|≤|najvi(?:š|s)e|max(?:imum)?)?\s*(\d+(?:\.\d+)?)/i.exec(query);
       if (risk?.[1]) filters.push({ field: "trade_plan.entry_risk_pct", op: "lte", value: Number(risk[1]) });
       const ticker = /^\s*\$?([A-Z]{1,6}(?:\.[A-Z])?)\s*$/.exec(query);
-      if (ticker?.[1]) filters.push({ field: "ticker", op: "eq", value: ticker[1] });
-      if (/\brwb\b/i.test(query)) {
+      if (ticker?.[1] && !asksForRwb) {
+        filters.push({ field: "ticker", op: "eq", value: ticker[1] });
+      }
+      if (asksForRwb) {
         filters.push({ field: "setups.rwb_squeeze_thrust.triggered", op: "is_true" });
       }
       if (/\bcrash[-_ ]base\b/i.test(query)) filters.push({ field: "primary_setup", op: "eq", value: "crash_base_stage1" });
@@ -133,7 +145,7 @@ export function createStockScoutServer(
           : await repository.searchFullScan(query, 20)
       );
       const results = rows.map(documentResult);
-      const scan = scanContext(rows[0]);
+      const scan = await scanContextForRows(repository, rows);
       return result(
         { scan, results },
         `Found ${results.length} full-scan documents. ${scanSummary(scan)}`,
@@ -185,7 +197,7 @@ export function createStockScoutServer(
     },
     async ({ query }) => {
       const records = await repository.describeFullScanFields(query);
-      const scan = scanContext(records[0]);
+      const scan = await scanContextForRows(repository, records);
       return result(
         { scan, records },
         `Found ${records.length} scan fields. ${scanSummary(scan)}`,
@@ -224,7 +236,7 @@ export function createStockScoutServer(
         }
         return { ...documentResult(row), values, scan_date: row.scan_date, price_type: "scan" };
       });
-      const scan = scanContext(rows[0]);
+      const scan = await scanContextForRows(repository, rows);
       return result(
         { scan, records },
         `Matched and returned ${records.length} candidates. ${scanSummary(scan)}`,
