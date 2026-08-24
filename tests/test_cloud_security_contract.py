@@ -97,6 +97,7 @@ class CloudSecurityContractTest(unittest.TestCase):
             self.assertIn(claim, source)
         self.assertIn('const AUDIENCE = "stockscout-eod-publish"', source)
         self.assertIn("blob content hash mismatch", source)
+        self.assertIn('if (shard === "manifest") cacheControl = "0"', source)
         self.assertNotIn("SUPABASE_SERVICE_ROLE_KEY=", source)
 
     def test_oidc_delivery_resume_actions_are_owner_scoped_and_allowlisted(self) -> None:

@@ -122,3 +122,33 @@
   tests and production build passed, MCP 14 passed, and Edge 9 passed with a
   clean Deno type check. Production migration, deployment and the retry run
   remain gated on a green pull request.
+
+## 2026-08-24 — Resumable atomic market-cache refresh
+
+- The notification-disabled retry run `32745729860` completed the deterministic
+  scan, health gate, Ryan shadow, 100% private chart coverage, chart publication,
+  public snapshot build and public hash/cardinality audit. It stopped safely
+  during the final private cache refresh after uploading 196 of 256 shards: the
+  `c4` request hit a 120-second read timeout. No cache manifest was written, so
+  the partial upload never became active; Pages, cloud activation and Telegram
+  remained unchanged.
+- The root-cause audit also found that the publisher reused one GitHub OIDC JWT
+  across the entire upload: the final Edge success occurred almost exactly at
+  that short-lived token's five-minute boundary. The client now reads the JWT
+  `exp` claim only to refresh it 60 seconds early during long publish and restore
+  operations; Supabase Edge remains the authority that verifies every token.
+- Added three-attempt bounded retries for transient Edge POST and signed-Storage
+  download failures. Each attempt obtains a still-valid bearer while reusing
+  identical canonical payload bytes and content hash; authorization, validation
+  and other protocol failures still fail immediately.
+- Changed rolling cache publication to two alternating object slots. All shards
+  are written to the inactive slot before the stable manifest is committed, so
+  an interrupted later refresh keeps the prior cache restorable. Slot zero
+  retains legacy object names to reuse the safe first-run partial upload, and
+  legacy manifests remain readable. The mutable manifest now has zero Storage
+  cache lifetime while immutable slot shards retain the long cache lifetime.
+- Local verification: 30 focused cache/security-contract tests passed; the full
+  Python suite passed 140 tests with 2 intentional public-mode skips; Ruff and
+  whitespace checks passed, and Edge format/type checks plus all 9 Edge tests
+  passed. No scanner, ranking, detector, trade-plan, report or notification
+  behavior was changed; production deployment remains gated on the pull request.

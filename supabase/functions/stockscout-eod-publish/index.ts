@@ -151,6 +151,7 @@ async function putBlob(
   let path: string;
   let sizeLimit: number;
   let contentType = "application/gzip";
+  let cacheControl = "31536000";
 
   if (kind === "chart") {
     // Compatibility path for one-file-per-ticker clients. The production
@@ -174,6 +175,9 @@ async function putBlob(
     bucket = MARKET_CACHE_BUCKET;
     path = `${runId}/${shard}.bin.gz`;
     sizeLimit = MAX_MARKET_CACHE_SHARD_BYTES;
+    // Data shards are immutable inside their active/inactive slot. The stable
+    // manifest is the commit pointer and must be revalidated after each flip.
+    if (shard === "manifest") cacheControl = "0";
   } else {
     throw new Error(
       "kind must be chart, chart-shard, chart-manifest, or market-cache",
@@ -202,7 +206,7 @@ async function putBlob(
   const { error } = await database.storage.from(bucket).upload(path, bytes, {
     upsert: true,
     contentType,
-    cacheControl: "31536000",
+    cacheControl,
     metadata: { sha256: actualHash, runId },
   });
   if (error) throw new Error(`blob upload failed: ${error.message}`);
