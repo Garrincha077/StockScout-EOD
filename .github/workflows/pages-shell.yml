@@ -1,0 +1,174 @@
+name: StockScout Pages shell repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Successful EOD workflow run whose verified public data must remain active"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stockscout-eod-production
+  cancel-in-progress: false
+
+jobs:
+  build_shell:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      manifest_sha256: ${{ steps.snapshot.outputs.manifest_sha256 }}
+      run_id: ${{ steps.snapshot.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: github-pages
+          path: .staging/pages-source
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Restore only the verified public snapshot
+        id: snapshot
+        shell: bash
+        run: |
+          mkdir -p .staging/pages-extracted frontend/public/data
+          tar -xf .staging/pages-source/artifact.tar -C .staging/pages-extracted
+          test -f .staging/pages-extracted/data/manifest.json
+          cp -R .staging/pages-extracted/data/. frontend/public/data/
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          manifest_path = Path("frontend/public/data/manifest.json")
+          payload = manifest_path.read_bytes()
+          manifest = json.loads(payload)
+          if manifest.get("status") != "healthy":
+              raise SystemExit("source Pages snapshot is not healthy")
+          run_id = str(manifest.get("runId", "")).strip()
+          if not run_id:
+              raise SystemExit("source Pages snapshot has no runId")
+          source_hash = hashlib.sha256(payload).hexdigest()
+          request = urllib.request.Request(
+              f"https://garrincha077.github.io/StockScout-EOD/data/manifest.json?repair={time.time_ns()}",
+              headers={"User-Agent": "StockScout-EOD-shell-repair/1.0"},
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              live_payload = response.read()
+          live_manifest = json.loads(live_payload)
+          if hashlib.sha256(live_payload).hexdigest() != source_hash:
+              raise SystemExit("source artifact is not the currently active Pages snapshot")
+          if live_manifest.get("runId") != run_id:
+              raise SystemExit("source artifact runId is not currently active on Pages")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"manifest_sha256={source_hash}\n")
+              output.write(f"run_id={run_id}\n")
+          PY
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build repaired PWA shell
+        working-directory: frontend
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
+        run: npm ci && npm run build
+
+      - name: Prove data identity and deep-link recovery assets
+        shell: bash
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ steps.snapshot.outputs.manifest_sha256 }}
+        run: |
+          actual_manifest_sha256="$(sha256sum frontend/dist/data/manifest.json | cut -d' ' -f1)"
+          test "$actual_manifest_sha256" = "$EXPECTED_MANIFEST_SHA256"
+          grep -q '/StockScout-EOD/assets/' frontend/dist/index.html
+          test -d frontend/dist/ticker/assets
+          test -f frontend/dist/ticker/assets/index-CfpEZ4tL.js
+          test -f frontend/dist/sw.js
+
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b
+        with:
+          path: frontend/dist
+
+  deploy:
+    needs: build_shell
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Atomically deploy the repaired shell with unchanged scan data
+        id: deploy
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+
+  verify:
+    needs: [build_shell, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Verify the exact snapshot and repository-absolute live shell
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.build_shell.outputs.manifest_sha256 }}
+          EXPECTED_RUN_ID: ${{ needs.build_shell.outputs.run_id }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import time
+          import urllib.request
+
+          base = "https://garrincha077.github.io/StockScout-EOD/"
+          expected_hash = os.environ["EXPECTED_MANIFEST_SHA256"]
+          expected_run = os.environ["EXPECTED_RUN_ID"]
+          last_error = "deployment was not visible"
+          for attempt in range(12):
+              try:
+                  nonce = str(time.time_ns())
+                  with urllib.request.urlopen(f"{base}data/manifest.json?verify={nonce}") as response:
+                      payload = response.read()
+                  manifest = json.loads(payload)
+                  if hashlib.sha256(payload).hexdigest() != expected_hash:
+                      raise RuntimeError("live manifest hash does not match source artifact")
+                  if manifest.get("runId") != expected_run:
+                      raise RuntimeError("live runId does not match source artifact")
+                  with urllib.request.urlopen(f"{base}?verify={nonce}") as response:
+                      index = response.read().decode("utf-8")
+                  match = re.search(r'src="(/StockScout-EOD/assets/[^"]+\.js)"', index)
+                  if not match:
+                      raise RuntimeError("live shell has no repository-absolute entry asset")
+                  with urllib.request.urlopen(f"https://garrincha077.github.io{match.group(1)}") as response:
+                      if response.status != 200:
+                          raise RuntimeError("live entry asset is unavailable")
+                  print(f"verified {expected_run} {expected_hash}")
+                  break
+              except Exception as error:
+                  last_error = str(error)
+                  if attempt == 11:
+                      raise SystemExit(last_error)
+                  time.sleep(5)
+          PY

@@ -1,5 +1,6 @@
-const CACHE='stockscout-eod-shell-v2'
-const SHELL=['./','./404.html','./manifest.webmanifest','./icons/stockscout.svg']
+const CACHE='stockscout-eod-shell-v3'
+const APP_ROOT=self.registration.scope
+const SHELL=[APP_ROOT,'404.html','manifest.webmanifest','icons/stockscout.svg'].map(path=>new URL(path,APP_ROOT).toString())
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(SHELL)).then(()=>self.skipWaiting())))
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim())))
 self.addEventListener('message',event=>{
@@ -39,5 +40,23 @@ self.addEventListener('fetch',event=>{
     event.respondWith(caches.match(request).then(cached=>cached||fetch(request).then(response=>{if(response.ok)caches.open(CACHE).then(cache=>cache.put(request,response.clone()));return response})))
     return
   }
-  if(request.mode==='navigate')event.respondWith(fetch(request).then(response=>{if(!response.ok)throw new Error(`HTTP ${response.status}`);const copy=response.clone();caches.open(CACHE).then(cache=>cache.put('./',copy));return response}).catch(()=>caches.match('./')))
+  if(request.mode==='navigate'){
+    const tickerMatch=url.pathname.match(/\/ticker\/([^/]+)\/?$/i)
+    if(tickerMatch){
+      const target=new URL(APP_ROOT)
+      target.search=url.search
+      let ticker=tickerMatch[1]
+      try{ticker=decodeURIComponent(ticker)}catch{}
+      target.searchParams.set('ticker',ticker)
+      event.respondWith(Promise.resolve(Response.redirect(target.toString(),302)))
+      return
+    }
+    event.respondWith(fetch(request).then(response=>{
+      if(response.ok&&url.pathname===new URL(APP_ROOT).pathname){
+        const copy=response.clone()
+        caches.open(CACHE).then(cache=>cache.put(APP_ROOT,copy))
+      }
+      return response
+    }).catch(()=>caches.match(APP_ROOT)))
+  }
 })

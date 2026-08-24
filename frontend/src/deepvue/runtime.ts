@@ -1,6 +1,18 @@
 export const GRID_STEP=16
 export const CHART_SHARD_COUNT=128
 
+export function marketRegimeLabel(market:unknown,fallback='UNKNOWN'){
+  if(!market||typeof market!=='object')return fallback
+  const regime=(market as Record<string,unknown>).regime
+  const values=typeof regime==='string'
+    ?[regime]
+    :regime&&typeof regime==='object'
+      ?['state','label','summary','guppy_state'].map(key=>(regime as Record<string,unknown>)[key])
+      :[]
+  const label=values.find(value=>typeof value==='string'&&value.trim())
+  return typeof label==='string'?label.trim().replaceAll('_',' ').toUpperCase():fallback
+}
+
 export type LegacyConfirmationStatus='CONFIRMED'|'EARLY'|'NEUTRAL'|'CONFLICT'|'RISK'|'UNAVAILABLE'
 export type LegacyConfirmationSidecar={
   affectsStockScout:false

@@ -1,7 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {fieldDefs,matchesRule} from './filterEngine.ts'
-import {RetryJsonCache,fetchJsonWithRetry,mergeLegacyConfirmationSidecar,nextGridCount} from './runtime.ts'
+import {RetryJsonCache,fetchJsonWithRetry,marketRegimeLabel,mergeLegacyConfirmationSidecar,nextGridCount} from './runtime.ts'
+
+test('marketRegimeLabel accepts scalar and production nested regime payloads',()=>{
+  assert.equal(marketRegimeLabel({regime:'confirmed'}),'CONFIRMED')
+  assert.equal(marketRegimeLabel({regime:{state:'under_pressure',guppy_state:'RWB'}}),'UNDER PRESSURE')
+  assert.equal(marketRegimeLabel({regime:{guppy_state:'RWB'}}),'RWB')
+  assert.equal(marketRegimeLabel({regime:{state:{unexpected:true}}}),'UNKNOWN')
+})
 
 test('nextGridCount advances in bounded batches',()=>{
   assert.equal(nextGridCount(16,123),32)

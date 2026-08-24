@@ -1,5 +1,6 @@
 import {useMemo,useState} from 'react'
 import {useStockScoutData} from './data/StockScoutDataProvider'
+import {marketRegimeLabel} from './deepvue/runtime'
 import './groups.css'
 
 type GroupRow={ticker:string;name:string;rank:number;rel1m:number;rel3m:number;rel6m:number;stocks:number;stage2Pct:number;earlyLeaders:number;medianOpportunity:number;avgConfidence?:number;topTickers:string[]}
@@ -29,7 +30,7 @@ export default function GroupsPage({onBack,onOpenTicker}:{onBack:()=>void;onOpen
   const coverage=mode==='Sectors'?payload.groups?.sectorCoverage||0:payload.groups?.industryCoverage||0
   const total=payload.universe?.length||0
   return <div className="grp-app">
-    <header className="grp-top"><div><button onClick={onBack}>← Terminal</button><span className="grp-dot">◉</span><b>STOCKSCOUT GROUPS</b><small>CONFIDENCE-WEIGHTED LEADERSHIP</small></div><div><span>{payload.market?.regime||'UNKNOWN'}</span><span>{coverage.toLocaleString()}/{total.toLocaleString()} mapped</span><span>{payload.market?.groupModel||'no group model'}</span></div></header>
+    <header className="grp-top"><div><button onClick={onBack}>← Terminal</button><span className="grp-dot">◉</span><b>STOCKSCOUT GROUPS</b><small>CONFIDENCE-WEIGHTED LEADERSHIP</small></div><div><span>{marketRegimeLabel(payload.market)}</span><span>{coverage.toLocaleString()}/{total.toLocaleString()} mapped</span><span>{payload.market?.groupModel||'no group model'}</span></div></header>
     <section className="grp-hero"><div><small>LEADING SECTOR</small><b>{payload.market?.topSector||'—'}</b><span>Raw proxy rank {payload.market?.topSectorRank||'—'}/99</span></div><div><small>LEADING INDUSTRY PROXY</small><b>{payload.market?.topIndustry||'—'}</b><span>Raw proxy rank {payload.market?.topIndustryRank||'—'}/99</span></div><div><small>AVG GROUP CONFIDENCE</small><b>{fmt(payload.groups?.averageConfidence??payload.market?.groupAverageConfidence,0)}%</b><span>Max Opportunity group modifier ±{fmt(payload.groups?.maxLeadershipAdjustmentPoints??payload.market?.groupLeadershipMaxAdjustment,0)} pts</span></div></section>
     <section className="grp-note"><b>How to read this:</b> groups remain behavioral proxies, not official GICS metadata. StockScout measures correlation strength plus recent/prior persistence and stability. Raw ETF rank is pulled toward neutral 50 as confidence falls. Opportunity v2 then uses group leadership only as a bounded confirmation modifier; there is no second leadership adjustment on top of final Opportunity.</section>
     <section className="grp-controls"><div><button className={mode==='Sectors'?'active':''} onClick={()=>setMode('Sectors')}>Sectors</button><button className={mode==='Industries'?'active':''} onClick={()=>setMode('Industries')}>Industry proxies</button></div><label>Sort <select value={sort} onChange={e=>setSort(e.target.value as Sort)}><option value="rank">Relative rank</option><option value="confidence">Mapped confidence</option><option value="early">Early leaders</option><option value="breadth">Stage 2 breadth</option><option value="opportunity">Median opportunity</option></select></label></section>
