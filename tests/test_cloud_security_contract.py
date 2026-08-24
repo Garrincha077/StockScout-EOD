@@ -12,6 +12,9 @@ MIGRATION = next((ROOT / "supabase" / "migrations").glob("*_stockscout_eod_cloud
 FACADE_MIGRATION = next(
     (ROOT / "supabase" / "migrations").glob("*_eod_edge_owner_api.sql")
 )
+FINALIZE_OPTIMIZATION_MIGRATION = next(
+    (ROOT / "supabase" / "migrations").glob("*_optimize_eod_finalize_gin_buffer.sql")
+)
 FUNCTION = ROOT / "supabase" / "functions" / "stockscout-eod-publish" / "index.ts"
 DATABASE_FUNCTION = (
     ROOT / "supabase" / "functions" / "stockscout-eod-publish" / "database.ts"
@@ -195,6 +198,24 @@ class CloudSecurityContractTest(unittest.TestCase):
         )
         self.assertIn("jsonb_strip_nulls(r.summary || jsonb_build_object", sql)
         self.assertIn("string_agg(record_hash", sql)
+
+    def test_finalize_bulk_load_keeps_indexes_and_rest_timeout_override(self) -> None:
+        base = MIGRATION.read_text(encoding="utf-8").lower()
+        optimization = FINALIZE_OPTIMIZATION_MIGRATION.read_text(
+            encoding="utf-8"
+        ).lower()
+        self.assertIn("using gin (record jsonb_path_ops)", base)
+        self.assertIn("using gin (search_document)", base)
+        self.assertIn(
+            "alter function public.eod_finalize_publish(uuid)", optimization
+        )
+        self.assertIn("set gin_pending_list_limit = '64mb'", optimization)
+        self.assertIn(
+            "alter function stockscout_api.eod_finalize_publish(uuid)", optimization
+        )
+        self.assertEqual(optimization.count("set statement_timeout = '60s'"), 2)
+        self.assertNotIn("alter role", optimization)
+        self.assertNotIn("drop index", optimization)
 
     def test_repeated_begin_resets_partial_staging_and_cleanup_is_service_only(self) -> None:
         sql = MIGRATION.read_text(encoding="utf-8").lower()
