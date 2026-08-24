@@ -2,8 +2,9 @@ import type {Session,SupabaseClient,User} from '@supabase/supabase-js'
 import {createContext,useCallback,useContext,useEffect,useMemo,useRef,useState,type ReactNode} from 'react'
 import {privateChartPath,privateChartRows,privateChartShard} from './chartPayload'
 import {clearOwnerLocalStorage,clearOwnerPasswordRecoveryLocation,nextOwnerWatchlist,normalizeOwnerTicker,ownerPasswordRecoveryRedirect,watchlistAfterSessionChange,type JsonRecord} from './ownerState'
-import {isBrowserSafeSupabaseKey} from './supabasePublicConfig'
+import {isBrowserSafeSupabaseKey,OWNER_DATA_SCHEMA} from './supabasePublicConfig'
 
+type OwnerSupabaseClient=SupabaseClient<any,any,typeof OWNER_DATA_SCHEMA,any,any>
 const DEFAULT_WATCHLIST='Default'
 const TABLES={
   watchlists:'eod_watchlists',savedScreens:'eod_saved_screens',drawings:'eod_drawings',
@@ -65,7 +66,7 @@ async function decodeJson(blob:Blob){
   }else text=await blob.text()
   return JSON.parse(text)
 }
-function downloadPrivateJson(client:SupabaseClient,path:string){
+function downloadPrivateJson(client:OwnerSupabaseClient,path:string){
   const key=`${CHART_BUCKET}:${path}`
   const existing=privateJsonCache.get(key)
   if(existing)return existing
@@ -79,7 +80,7 @@ function downloadPrivateJson(client:SupabaseClient,path:string){
 
 export function OwnerDataProvider({children}:{children:ReactNode}){
   const[config]=useState(ownerConfig)
-  const[client,setClient]=useState<SupabaseClient|null>(null)
+  const[client,setClient]=useState<OwnerSupabaseClient|null>(null)
   const[session,setSession]=useState<Session|null>(null)
   const[loading,setLoading]=useState(Boolean(config))
   const[error,setError]=useState('')
@@ -101,7 +102,7 @@ export function OwnerDataProvider({children}:{children:ReactNode}){
     if(typeof localStorage!=='undefined')clearOwnerLocalStorage(localStorage)
     let live=true
     import('@supabase/supabase-js').then(({createClient})=>{
-      if(live)setClient(createClient(config.url,config.key,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}}))
+      if(live)setClient(createClient(config.url,config.key,{db:{schema:OWNER_DATA_SCHEMA},auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}}))
     }).catch(next=>{if(live){setError(next instanceof Error?next.message:String(next));setLoading(false)}})
     return()=>{live=false}
   },[config])
@@ -186,9 +187,9 @@ export function OwnerDataProvider({children}:{children:ReactNode}){
     const removing=watchlist.includes(normalized)
     const next=nextOwnerWatchlist(watchlist,normalized,user.id)
     setWatchlist(next);setError('')
-    const result=removing
-      ?await client.from(TABLES.watchlists).delete().eq('user_id',user.id).eq('name',DEFAULT_WATCHLIST).eq('ticker',normalized)
-      :await client.from(TABLES.watchlists).upsert({user_id:user.id,name:DEFAULT_WATCHLIST,ticker:normalized},{onConflict:'user_id,name,ticker'})
+    const result=await client.rpc('eod_set_watchlist_ticker',{
+      p_name:DEFAULT_WATCHLIST,p_ticker:normalized,p_present:!removing,
+    })
     if(result.error){
       if(activeUserId.current===user.id)setWatchlist(watchlist)
       setError(result.error.message);throw result.error

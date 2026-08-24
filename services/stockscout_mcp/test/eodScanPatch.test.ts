@@ -153,10 +153,11 @@ test("filter translation uses typed JSON paths and valid PostgREST operators", (
 });
 
 test("Supabase screening emits typed nested PostgREST filters", async () => {
-  const requests: URL[] = [];
-  const mockFetch: typeof fetch = async (input) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    requests.push(url);
+  const requests: Request[] = [];
+  const mockFetch: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    requests.push(request);
     const payload = url.pathname.endsWith("/eod_latest_fields")
       ? [
           { field_path: "setups.rwb_squeeze_thrust.state", scalar_types: ["str"] },
@@ -183,23 +184,27 @@ test("Supabase screening emits typed nested PostgREST filters", async () => {
     [{ field: "setups.rwb_squeeze_thrust.bundle_width_pct", direction: "asc" }],
     20,
   );
-  const candidateRequest = requests.find((url) =>
-    url.pathname.endsWith("/eod_latest_candidates"));
+  const candidateRequest = requests.find((request) =>
+    new URL(request.url).pathname.endsWith("/eod_latest_candidates"));
   assert.ok(candidateRequest);
+  const candidateUrl = new URL(candidateRequest.url);
+  assert.ok(requests.length >= 2);
+  assert.ok(requests.every((request) =>
+    request.headers.get("Accept-Profile") === "stockscout_api"));
   assert.equal(
-    candidateRequest.searchParams.get("record->setups->rwb_squeeze_thrust->>state"),
+    candidateUrl.searchParams.get("record->setups->rwb_squeeze_thrust->>state"),
     "neq.pending",
   );
   assert.equal(
-    candidateRequest.searchParams.get("record->setups->rwb_squeeze_thrust->bundle_width_pct"),
+    candidateUrl.searchParams.get("record->setups->rwb_squeeze_thrust->bundle_width_pct"),
     "lte.3",
   );
   assert.equal(
-    candidateRequest.searchParams.get("record->setups->rwb_squeeze_thrust->triggered"),
+    candidateUrl.searchParams.get("record->setups->rwb_squeeze_thrust->triggered"),
     "eq.true",
   );
   assert.match(
-    String(candidateRequest.searchParams.get("order")),
+    String(candidateUrl.searchParams.get("order")),
     /record->setups->rwb_squeeze_thrust->bundle_width_pct\.asc\.nullslast/,
   );
 });

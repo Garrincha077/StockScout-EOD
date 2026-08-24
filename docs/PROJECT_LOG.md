@@ -102,3 +102,23 @@
   and production build passed, and MCP 14 passed including the new cookie
   confidentiality/tamper regression. The hosted CI and CodeQL rerun remain the
   final merge gate.
+
+## 2026-08-24 — Narrow PostgREST facade for the first EOD run
+
+- The first manually dispatched, notification-disabled EOD run for 2026-08-21
+  stopped safely before scanning or deployment while restoring the private
+  market cache. The Edge publisher had implicitly selected the unexposed
+  `public` API schema, so Supabase rejected the owner lookup. The prior Pages
+  app, cloud snapshot and Telegram state were unchanged.
+- Added an explicitly exposed `stockscout_api` facade with security-invoker
+  views, minimal role grants and service-only wrapper RPCs. The Edge publisher,
+  MCP data source and owner browser client now select that schema explicitly;
+  the broad `public` schema remains unexposed.
+- Replaced view-based conflict writes with bounded, validated RPCs for alert
+  events and atomic owner watchlist toggles. Market-cache restore now treats
+  only a real missing object as a cold bootstrap and fails closed on permission
+  or service errors.
+- Local verification: Python 129 passed/2 intentionally skipped, frontend 46
+  tests and production build passed, MCP 14 passed, and Edge 9 passed with a
+  clean Deno type check. Production migration, deployment and the retry run
+  remain gated on a green pull request.

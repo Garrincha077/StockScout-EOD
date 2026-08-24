@@ -9,7 +9,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = next((ROOT / "supabase" / "migrations").glob("*_stockscout_eod_cloud_security.sql"))
+FACADE_MIGRATION = next(
+    (ROOT / "supabase" / "migrations").glob("*_eod_edge_owner_api.sql")
+)
 FUNCTION = ROOT / "supabase" / "functions" / "stockscout-eod-publish" / "index.ts"
+DATABASE_FUNCTION = (
+    ROOT / "supabase" / "functions" / "stockscout-eod-publish" / "database.ts"
+)
 ALERTS_FUNCTION = ROOT / "supabase" / "functions" / "stockscout-eod-publish" / "alerts.ts"
 JCS_FIXTURE = (
     ROOT / "supabase" / "functions" / "stockscout-eod-publish" / "jcs_fixture.json"
@@ -95,8 +101,10 @@ class CloudSecurityContractTest(unittest.TestCase):
 
     def test_oidc_delivery_resume_actions_are_owner_scoped_and_allowlisted(self) -> None:
         source = FUNCTION.read_text(encoding="utf-8")
+        database = DATABASE_FUNCTION.read_text(encoding="utf-8")
         sql = MIGRATION.read_text(encoding="utf-8").lower()
-        self.assertIn('database.rpc("eod_single_owner_id")', source)
+        self.assertIn("lookupSingleOwner(database)", source)
+        self.assertIn('rpc("eod_edge_single_owner_id")', database)
         self.assertNotIn("STOCKSCOUT_OWNER_ID", source)
         self.assertIn("public.eod_single_owner_id()", sql)
         self.assertIn("v_count <> 1", sql)
@@ -108,6 +116,61 @@ class CloudSecurityContractTest(unittest.TestCase):
         self.assertIn("public.eod_record_delivery_progress", sql)
         self.assertIn("delivery owner is not allowlisted", sql)
         self.assertIn("greatest(\n        eod_delivery_state.last_successful_part", sql)
+
+    def test_edge_owner_lookup_uses_service_only_exposed_schema_bridge(self) -> None:
+        database = DATABASE_FUNCTION.read_text(encoding="utf-8")
+        facade = FACADE_MIGRATION.read_text(encoding="utf-8").lower()
+        self.assertIn("schema(EDGE_API_SCHEMA)", database)
+        self.assertIn('EDGE_API_SCHEMA = "stockscout_api"', database)
+        self.assertIn(
+            "security invoker\nset search_path = ''",
+            facade,
+        )
+        self.assertIn(
+            "revoke all on function\n"
+            "  stockscout_api.eod_edge_single_owner_id(),",
+            facade,
+        )
+        self.assertIn(
+            "stockscout_api.eod_edge_single_owner_id(),",
+            facade,
+        )
+        self.assertNotIn(
+            "grant execute on function stockscout_api.eod_edge_single_owner_id()\n"
+            "  to authenticated",
+            facade,
+        )
+
+    def test_exposed_facade_is_narrow_invoker_scoped_and_complete(self) -> None:
+        sql = FACADE_MIGRATION.read_text(encoding="utf-8").lower()
+        for view in (
+            "eod_scans",
+            "eod_candidate_history",
+            "eod_latest_scan",
+            "eod_latest_candidates",
+            "eod_latest_fields",
+            "eod_scan_history",
+            "eod_watchlists",
+            "eod_saved_screens",
+            "eod_drawings",
+            "eod_alerts",
+            "eod_alert_events",
+            "eod_delivery_state",
+        ):
+            self.assertIn(f"view stockscout_api.{view}", sql)
+        self.assertGreaterEqual(sql.count("with (security_invoker = true)"), 12)
+        self.assertIn("grant usage on schema stockscout_api", sql)
+        self.assertNotIn("grant usage on schema public", sql)
+        self.assertIn("stockscout_api.eod_begin_publish(jsonb)", sql)
+        self.assertIn("stockscout_api.eod_finalize_publish(uuid)", sql)
+        self.assertIn("stockscout_api.eod_upsert_alert_events(jsonb)", sql)
+        self.assertIn("on conflict (user_id, event_key) do nothing", sql)
+        self.assertIn("alert event owner or alert is not allowlisted", sql)
+        self.assertIn(
+            "stockscout_api.eod_set_watchlist_ticker(text, text, boolean)", sql
+        )
+        self.assertIn("v_user_id uuid := (select auth.uid())", sql)
+        self.assertIn("on conflict (user_id, name, ticker) do nothing", sql)
 
     def test_publish_wrapper_hash_matches_cross_language_jcs_fixture(self) -> None:
         fixture = json.loads(JCS_FIXTURE.read_text(encoding="utf-8"))
@@ -144,9 +207,11 @@ class CloudSecurityContractTest(unittest.TestCase):
     def test_oidc_alert_evaluation_is_owner_scoped_allowlisted_and_idempotent(self) -> None:
         edge = FUNCTION.read_text(encoding="utf-8")
         evaluator = ALERTS_FUNCTION.read_text(encoding="utf-8")
+        facade = FACADE_MIGRATION.read_text(encoding="utf-8").lower()
         self.assertIn('action === "evaluate_alerts"', edge)
         self.assertIn('.eq("user_id", ownerId)', edge)
-        self.assertIn('onConflict: "user_id,event_key"', edge)
+        self.assertIn('.rpc("eod_upsert_alert_events"', edge)
+        self.assertIn("on conflict (user_id, event_key) do nothing", facade)
         self.assertIn("alertEventKey(runId, evaluation.alertId, ticker)", edge)
         self.assertIn('"trade_status"', evaluator)
         self.assertIn('"screen"', evaluator)
