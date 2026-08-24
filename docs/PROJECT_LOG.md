@@ -152,3 +152,25 @@
   whitespace checks passed, and Edge format/type checks plus all 9 Edge tests
   passed. No scanner, ranking, detector, trade-plan, report or notification
   behavior was changed; production deployment remains gated on the pull request.
+
+## 2026-08-24 — First healthy Pages run and cloud-finalize optimization
+
+- The notification-disabled verification run `32755523760` produced the healthy
+  `2026-08-21-eod-32755523760-1` snapshot: 2,209 candidates plus 15 excluded,
+  99.93% market coverage, 100% owner chart coverage and all 256 private cache
+  shards. After enabling workflow-based GitHub Pages, deployment and the exact
+  Pages run/hash pointer verification passed without rerunning the scan.
+- Supabase accepted all 2,224 idempotent cloud staging rows but its atomic
+  finalize rolled back at the PostgREST authenticator's inherited 8-second
+  statement timeout. The 90-second limit on the inner implementation could not
+  extend the already-started exposed wrapper call. The prior cloud snapshot
+  remained active and downstream alerts/Telegram did not run.
+- A live temporary-table benchmark measured the bounded indexed bulk-load path:
+  the unchanged full payload and both existing indexes completed in 26.608
+  seconds when the transaction used a 64 MB GIN pending-list limit; separate
+  bulk heap/vector and index construction completed in 30.972 seconds. The
+  migration gives finalize that scoped limit while preserving the JSONB/
+  full-text indexes and atomic cutover. Both the exposed wrapper and inner
+  implementation share a scoped 60-second fail-safe; the project-wide role
+  timeout is unchanged. No scan, ranking, detector, trade-plan, public record or
+  search semantics changed. Exact production activation remains the final gate.
