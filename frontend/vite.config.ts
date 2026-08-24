@@ -1,6 +1,6 @@
 import {defineConfig,loadEnv} from 'vite'
 import react from '@vitejs/plugin-react'
-import {rmSync} from 'node:fs'
+import {cpSync,rmSync} from 'node:fs'
 import {resolve} from 'node:path'
 import {requireBrowserSafeSupabaseKey} from './src/owner/supabasePublicConfig.ts'
 
@@ -10,10 +10,17 @@ export default defineConfig(({mode})=>{
   if(publicKey)requireBrowserSafeSupabaseKey(publicKey)
   return{
     plugins:[react(),{
-      name:'exclude-canonical-audit-snapshot',
-      closeBundle(){rmSync(resolve(import.meta.dirname,'dist/data/latest.json'),{force:true})},
+      name:'prepare-pages-artifact',
+      closeBundle(){
+        const outputRoot=resolve(import.meta.dirname,'dist')
+        rmSync(resolve(outputRoot,'data/latest.json'),{force:true})
+        // One-release bridge for clients still controlled by shell-v2. That
+        // worker can serve its cached relative index at /ticker/* before the
+        // new worker gets a chance to activate.
+        cpSync(resolve(outputRoot,'assets'),resolve(outputRoot,'ticker/assets'),{recursive:true})
+      },
     }],
-    base:'./',
+    base:'/StockScout-EOD/',
     build:{
       outDir:'dist',
       sourcemap:false,

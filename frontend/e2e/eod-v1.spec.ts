@@ -15,7 +15,7 @@ const rows=[
   {id:`scan:${runId}:candidate:AAA`,ticker:'AAA',scanOrder:0,focusBlend:81,price:50,stage:2,stageName:'Stage 2',primarySetup:'Launch / RWB',setupTags:['Launch / RWB'],opportunityScore:50,rsRank:95,tradeStatus:'entry_ready',entryRiskPct:8,tacticalStopLevel:46,changedToday:true,changeLabels:['Fresh trigger']},
   {id:`scan:${runId}:candidate:BBB`,ticker:'BBB',scanOrder:1,focusBlend:75,price:40,stage:2,stageName:'Stage 2',primarySetup:'Crash Base',setupTags:['Crash Base'],opportunityScore:99,rsRank:90,tradeStatus:'trigger_pending',entryRiskPct:9,changedToday:false,newUniverseMember:true},
 ]
-const core={schemaVersion:'stockscout-eod/candidate-summary/v1',runId,sessionDate:'2026-08-21',generatedAt,market:{regime:'TEST'},universe:rows,detailShards:{AAA:'006',BBB:'012'}}
+const core={schemaVersion:'stockscout-eod/candidate-summary/v1',runId,sessionDate:'2026-08-21',generatedAt,market:{regime:{state:'under_pressure',guppy_state:'RWB',summary:'Uptrend under pressure'}},universe:rows,detailShards:{AAA:'006',BBB:'012'}}
 const details={
   AAA:{...rows[0],tradePlan:{status:'entry_ready',reasonCodes:['fresh_breakout'],triggerState:'fresh',triggerReferenceLevel:51,entryReferenceLevel:50,structuralInvalidationLevel:46,entryRiskPct:8,extensionAtr:.2,tacticalStopLevel:46,tacticalRiskPct:8,source:'primary',version:'v1'}},
   BBB:{...rows[1],tradePlan:{status:'trigger_pending',reasonCodes:['below_trigger'],triggerState:'pending',triggerReferenceLevel:42,entryReferenceLevel:42,structuralInvalidationLevel:38,entryRiskPct:9.5,extensionAtr:-.4,tacticalStopLevel:39,tacticalRiskPct:7,source:'primary',version:'v1'}},
@@ -31,9 +31,14 @@ test('v1 EOD app is responsive, trade-safe and public-chart safe',async({page},t
   await page.route(`**/data/runs/${runId}/history.json*`,route=>route.fulfill({json:[{runId,sessionDate:'2026-08-21',generatedAt,status:'healthy',coveragePct:99.8,candidateCount:2,excludedCount:1},{runId:'20260820-close',sessionDate:'2026-08-20',generatedAt,status:'degraded',coveragePct:96,candidateCount:2,excludedCount:2}] }))
   await page.route('**/data/validation-status.json*',route=>route.fulfill({status:404,body:''}))
 
-  await page.goto('/')
+  await page.goto(`/StockScout-EOD/ticker/AAA?run=${runId}`)
+  await expect(page).toHaveURL(new RegExp(`/ticker/AAA\\?run=${runId}$`))
   await expect(page.locator('.dv-brand')).toContainText('STOCKSCOUT EOD')
   await expect(page.locator('.dv-brand')).toContainText('2026-08-21')
+  await expect(page.locator('.dv-live > b')).toHaveText('UNDER PRESSURE')
+  await page.locator('.dv-groups-launch').evaluate((button:HTMLButtonElement)=>button.click())
+  await expect(page.locator('.grp-top')).toContainText('UNDER PRESSURE')
+  await page.locator('.grp-top button').evaluate((button:HTMLButtonElement)=>button.click())
   await expect(page.locator('.dv-tablewrap tbody tr').first()).toContainText('AAA')
   await expect(page.locator('.dv-detailhead')).toContainText('STOCKSCOUT · FOCUS BLEND')
   await expect(page.locator('.dv-detailhead')).toContainText('81.0')
@@ -61,5 +66,7 @@ test('v1 EOD app is responsive, trade-safe and public-chart safe',async({page},t
   await page.locator('.dv-top nav button').filter({hasText:/^History/}).click()
   await expect(page.locator('.dv-market')).toContainText('2026-08-20')
   await expect(page.locator('.dv-market')).toContainText('2')
+  await page.locator('.dv-top nav button').filter({hasText:/^Market$/}).evaluate((button:HTMLButtonElement)=>button.click())
+  await expect(page.locator('.dv-market')).toContainText('Regime UNDER PRESSURE')
   expect(privateRequests).toEqual([])
 })

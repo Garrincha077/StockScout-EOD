@@ -194,3 +194,27 @@
   of also being parsed as a three-letter ticker. Zero-match search, describe and
   screen responses resolve their context from the active scan history, so they
   still report the correct dated health state rather than `legacy_snapshot`.
+
+## 2026-08-24 — Recover GitHub Pages ticker deep links
+
+- The first public snapshot exposed two independent blank-screen failures. Its
+  market regime is a nested object, while several React views rendered that object
+  directly; additionally, the PWA used relative bundle URLs, so a cached shell
+  served at `/ticker/*` requested nonexistent `/ticker/assets/*` files.
+- Market regime rendering now accepts both the legacy scalar and production
+  nested shape. The Pages build uses repository-absolute assets, shell v3
+  redirects canonical ticker navigations through the query-preserving fallback,
+  and a bounded compatibility entry recovers clients still controlled by the
+  only deployed shell-v2 bundle.
+- Added a manual shell-only Pages repair workflow. It restores the successful
+  `github-pages` artifact selected by workflow run ID, proves the public manifest
+  hash is byte-identical before deployment, and verifies the exact live run and
+  entry asset afterward. It cannot run a scan, cloud publish or notification.
+- Local verification used the real `2026-08-21-eod-32755523760-1` artifact and
+  preserved manifest SHA-256
+  `47f288d096dfe446871a338bedef32a18d5f0a6db62b3ae644468a629e83b709`.
+  A simulated stale shell-v2 request and a fresh direct PSNL route both rendered
+  the healthy app with `UNDER PRESSURE`, no failed requests and no console
+  errors. Python passed 142 tests with 2 intentional skips, Ruff passed,
+  frontend passed 48 Node tests, production build and all 10 Pixel 5/desktop
+  Playwright cases.
