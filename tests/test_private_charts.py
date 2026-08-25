@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import gzip
 import json
+from io import BytesIO
+from urllib.error import HTTPError
 
 import pandas as pd
 import pytest
 
 from stock_scout.data.cache import ParquetCache
+from stockscout_eod import charts
 from stockscout_eod.charts import build_chart_staging
 from tests.test_artifacts import _scan
 
@@ -78,4 +81,27 @@ def test_chart_builder_rejects_pages_public_destination(tmp_path) -> None:
                 "https://fixture.supabase.co/storage/v1/object/public/"
                 f"stockscout-eod-charts/{scan.run_id}"
             ),
+        )
+
+
+def test_chart_publisher_surfaces_bounded_json_error(monkeypatch) -> None:
+    def reject(*_args, **_kwargs):
+        raise HTTPError(
+            "https://example.invalid/publish",
+            400,
+            "Bad Request",
+            {},
+            BytesIO(b'{"error":"legacy chart manifest mismatch"}'),
+        )
+
+    monkeypatch.setattr(charts, "urlopen", reject)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"HTTP 400.*legacy chart manifest mismatch",
+    ):
+        charts._post_json(
+            "https://example.invalid/publish",
+            "secret-token",
+            {"action": "promote_chart_run"},
         )

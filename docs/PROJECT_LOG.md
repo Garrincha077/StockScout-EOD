@@ -239,3 +239,13 @@
   Node tests and the production build passed, and all 10 Pixel 5/desktop
   Playwright cases passed. Production migration, Edge deployment and live
   anonymous chart verification remain explicit final cutover gates.
+
+## 2026-08-25 — Actionable chart-publisher failures
+
+- The one-time legacy chart promotion returned HTTP 400, but Python's urllib
+  raised before the publisher could surface its bounded JSON error message.
+  The client now reports only the publisher's sanitized `error`/`message`
+  field, capped at 500 characters, without response headers or OIDC tokens.
+- Added a regression test for the HTTP error path. The focused chart tests and
+  Ruff pass; this is diagnostics-only and does not change chart data, scan
+  output, ranking, detector or trade-plan behavior.

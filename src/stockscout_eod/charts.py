@@ -8,6 +8,7 @@ import math
 from datetime import UTC, date, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -209,10 +210,24 @@ def _post_json(
         },
         method="POST",
     )
-    with urlopen(request, timeout=timeout) as response:
-        if response.status < 200 or response.status >= 300:
-            raise RuntimeError(f"chart publish failed with HTTP {response.status}")
-        result = json.loads(response.read())
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            if response.status < 200 or response.status >= 300:
+                raise RuntimeError(f"chart publish failed with HTTP {response.status}")
+            result = json.loads(response.read())
+    except HTTPError as error:
+        detail = "request rejected"
+        try:
+            body = json.loads(error.read(2048))
+            if isinstance(body, dict):
+                message = body.get("error") or body.get("message")
+                if isinstance(message, str) and message.strip():
+                    detail = " ".join(message.split())[:500]
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            pass
+        raise RuntimeError(
+            f"chart publisher rejected request (HTTP {error.code}): {detail}"
+        ) from error
     if not isinstance(result, dict) or result.get("ok") is not True:
         raise RuntimeError("chart publisher returned an invalid response")
     data = result.get("data")
