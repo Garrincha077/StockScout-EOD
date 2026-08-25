@@ -20,8 +20,9 @@ No consumer may rescore or reorder candidates silently.
   `scan_order`.
 - `CandidateDetailV1` is the sanitized full candidate with nested setups,
   evidence metadata, risk flags, exclusion status, and `trade_plan`.
-- `ChartPayloadV1` contains compact daily/weekly arrays and is stored only in
-  the private owner chart bucket.
+- `ChartPayloadV1` contains compact five-year daily arrays plus weekly bars
+  derived from the same window. A hashed chart index is part of the immutable
+  Pages snapshot; gzip shards live at public, read-only Supabase Storage URLs.
 
 Candidate IDs use `scan:{run_id}:candidate:{ticker}`. The current full snapshot
 is immutable; activation occurs only by switching a small manifest/index after
@@ -35,4 +36,5 @@ all cardinality and hash checks pass.
 - An MCP sync failure does not discard a healthy Pages scan; Telegram labels
   the ChatGPT index stale.
 - Telegram delivery is multipart, idempotent, and resumable.
-
+- Chart cleanup protects both the active cloud run and the exact run deployed
+  on Pages, so an MCP sync failure cannot remove charts still used by the app.

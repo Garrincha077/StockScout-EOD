@@ -1,6 +1,5 @@
 import type {Session,SupabaseClient,User} from '@supabase/supabase-js'
 import {createContext,useCallback,useContext,useEffect,useMemo,useRef,useState,type ReactNode} from 'react'
-import {privateChartPath,privateChartRows,privateChartShard} from './chartPayload'
 import {clearOwnerLocalStorage,clearOwnerPasswordRecoveryLocation,nextOwnerWatchlist,normalizeOwnerTicker,ownerPasswordRecoveryRedirect,watchlistAfterSessionChange,type JsonRecord} from './ownerState'
 import {isBrowserSafeSupabaseKey,OWNER_DATA_SCHEMA} from './supabasePublicConfig'
 
@@ -10,7 +9,6 @@ const TABLES={
   watchlists:'eod_watchlists',savedScreens:'eod_saved_screens',drawings:'eod_drawings',
   alerts:'eod_alerts',alertEvents:'eod_alert_events',deliveryState:'eod_delivery_state',
 } as const
-const CHART_BUCKET='stockscout-eod-charts'
 
 export type OwnerSavedScreen={id:string;name:string;definition:JsonRecord;created_at?:string;updated_at?:string}
 export type OwnerDrawing={id:string;ticker:string;interval:string;payload:JsonRecord;created_at?:string;updated_at?:string}
@@ -31,7 +29,6 @@ type OwnerContextValue={
   requestPasswordReset:(email:string)=>Promise<void>
   updatePassword:(password:string)=>Promise<boolean>
   toggleWatch:(ticker:string)=>Promise<void>
-  loadPrivateChart:(runId:string,ticker:string)=>Promise<unknown[]|null>
   listSavedScreens:()=>Promise<OwnerSavedScreen[]>
   saveSavedScreen:(screen:OwnerSavedScreenInput)=>Promise<void>
   deleteSavedScreen:(id:string)=>Promise<void>
@@ -51,31 +48,8 @@ function ownerConfig(){
   if(!url||!key||!isBrowserSafeSupabaseKey(key))return null
   return{url,key}
 }
-const privateJsonCache=new Map<string,Promise<any>>()
-function clearPrivateOwnerCache(){
-  privateJsonCache.clear()
+function clearOwnerCache(){
   if(typeof localStorage!=='undefined')clearOwnerLocalStorage(localStorage)
-}
-async function decodeJson(blob:Blob){
-  let text:string
-  if(blob.type.includes('gzip')||typeof DecompressionStream!=='undefined'){
-    try{
-      const stream=blob.stream().pipeThrough(new DecompressionStream('gzip'))
-      text=await new Response(stream).text()
-    }catch{text=await blob.text()}
-  }else text=await blob.text()
-  return JSON.parse(text)
-}
-function downloadPrivateJson(client:OwnerSupabaseClient,path:string){
-  const key=`${CHART_BUCKET}:${path}`
-  const existing=privateJsonCache.get(key)
-  if(existing)return existing
-  const request=client.storage.from(CHART_BUCKET).download(path).then(({data,error})=>{
-    if(error)throw error
-    return decodeJson(data)
-  }).catch(error=>{privateJsonCache.delete(key);throw error})
-  privateJsonCache.set(key,request)
-  return request
 }
 
 export function OwnerDataProvider({children}:{children:ReactNode}){
@@ -93,12 +67,12 @@ export function OwnerDataProvider({children}:{children:ReactNode}){
     const nextUserId=next?.user.id??null
     setWatchlist(current=>watchlistAfterSessionChange(current,activeUserId.current,nextUserId))
     activeUserId.current=nextUserId
-    if(!nextUserId)clearPrivateOwnerCache()
+    if(!nextUserId)clearOwnerCache()
     setSession(next)
   },[])
 
   useEffect(()=>{
-    if(!config){clearPrivateOwnerCache();setLoading(false);return}
+    if(!config){clearOwnerCache();setLoading(false);return}
     if(typeof localStorage!=='undefined')clearOwnerLocalStorage(localStorage)
     let live=true
     import('@supabase/supabase-js').then(({createClient})=>{
@@ -201,22 +175,6 @@ export function OwnerDataProvider({children}:{children:ReactNode}){
     return{client,user}
   },[client,user])
 
-  const loadPrivateChart=useCallback(async(runId:string,ticker:string)=>{
-    if(!client||!user)return null
-    const normalized=normalizeOwnerTicker(ticker),root=`${user.id}/${runId}`
-    try{
-      const chartManifest=await downloadPrivateJson(client,`${root}/manifest.json`)
-      const shard=privateChartShard(chartManifest,normalized)
-      if(!shard)return null
-      const path=privateChartPath(user.id,runId,shard)
-      const payload=await downloadPrivateJson(client,path)
-      return privateChartRows(payload,normalized)
-    }catch(downloadError){
-      if(downloadError instanceof Error&&/not found|404/i.test(downloadError.message))return null
-      throw downloadError
-    }
-  },[client,user])
-
   const listSavedScreens=useCallback(async()=>{
     const{client:ownerClient,user:owner}=requireOwner()
     const{data,error:queryError}=await ownerClient.from(TABLES.savedScreens).select('id,name,definition,created_at,updated_at').eq('user_id',owner.id).order('updated_at',{ascending:false})
@@ -281,9 +239,9 @@ export function OwnerDataProvider({children}:{children:ReactNode}){
   },[requireOwner])
 
   const value=useMemo<OwnerContextValue>(()=>({
-    configured:Boolean(config),loading,user,error,passwordRecovery,watchlist,signIn,signOut,requestPasswordReset,updatePassword,toggleWatch,loadPrivateChart,
+    configured:Boolean(config),loading,user,error,passwordRecovery,watchlist,signIn,signOut,requestPasswordReset,updatePassword,toggleWatch,
     listSavedScreens,saveSavedScreen,deleteSavedScreen,listDrawings,saveDrawing,deleteDrawing,listAlerts,saveAlert,deleteAlert,
-  }),[config,loading,user,error,passwordRecovery,watchlist,signIn,signOut,requestPasswordReset,updatePassword,toggleWatch,loadPrivateChart,listSavedScreens,saveSavedScreen,deleteSavedScreen,listDrawings,saveDrawing,deleteDrawing,listAlerts,saveAlert,deleteAlert])
+  }),[config,loading,user,error,passwordRecovery,watchlist,signIn,signOut,requestPasswordReset,updatePassword,toggleWatch,listSavedScreens,saveSavedScreen,deleteSavedScreen,listDrawings,saveDrawing,deleteDrawing,listAlerts,saveAlert,deleteAlert])
   return<OwnerContext.Provider value={value}>{children}</OwnerContext.Provider>
 }
 

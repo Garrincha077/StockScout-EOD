@@ -1,14 +1,29 @@
 import {expect,test} from '@playwright/test'
+import {createHash} from 'node:crypto'
+import {gzipSync} from 'node:zlib'
 
 const generatedAt=new Date().toISOString()
 const runId='20260821-close'
 const asset=(path:string,count:number)=>({path,sha256:`sha-${path}`,bytes:10,count})
+const chartPayload={
+  AAA:{daily:[[1787270400,49,51,48,50,100000]]},
+  BBB:{daily:[[1787270400,39,41,38,40,90000]]},
+}
+const chartShard=gzipSync(Buffer.from(JSON.stringify(chartPayload)))
+const chartHash=createHash('sha256').update(chartShard).digest('hex')
+const chartManifest={
+  schemaVersion:'stockscout-eod/charts-v1',runId,
+  storageBaseUrl:`https://example.supabase.co/storage/v1/object/public/stockscout-eod-charts/${runId}`,
+  shards:[{name:'001',sha256:chartHash,bytes:chartShard.byteLength,tickerCount:2}],shardsByTicker:{AAA:'001',BBB:'001'},
+}
 const manifest={
   manifestVersion:1,schemaVersion:'stockscout-eod/v1',runId,sessionDate:'2026-08-21',generatedAt,status:'healthy',priceMode:'eod',
+  chartStatus:'ready',
   counts:{candidates:2,excluded:1,total:3},provenance:{primary:'test'},versions:{ranking:'frozen',detectors:'fixture',tradePlan:'v1'},
   assets:{
     core:asset(`runs/${runId}/core.json`,2),details:{...asset(`runs/${runId}/details`,2),shardCount:128},
     excluded:asset(`runs/${runId}/excluded.json`,1),history:asset(`runs/${runId}/history.json`,1),
+    charts:asset(`runs/${runId}/charts/manifest.json`,2),
   },
 }
 const rows=[
@@ -21,14 +36,16 @@ const details={
   BBB:{...rows[1],tradePlan:{status:'trigger_pending',reasonCodes:['below_trigger'],triggerState:'pending',triggerReferenceLevel:42,entryReferenceLevel:42,structuralInvalidationLevel:38,entryRiskPct:9.5,extensionAtr:-.4,tacticalStopLevel:39,tacticalRiskPct:7,source:'primary',version:'v1'}},
 }
 
-test('v1 EOD app is responsive, trade-safe and public-chart safe',async({page},testInfo)=>{
-  const privateRequests:string[]=[]
-  page.on('request',request=>{if(/supabase|storage\/v1|auth\/v1/i.test(request.url()))privateRequests.push(request.url())})
+test('v1 EOD app is responsive, trade-safe and renders public charts without login',async({page},testInfo)=>{
+  const supabaseRequests:string[]=[]
+  page.on('request',request=>{if(/supabase|storage\/v1|auth\/v1/i.test(request.url()))supabaseRequests.push(request.url())})
   await page.route('**/data/manifest.json*',route=>route.fulfill({json:manifest}))
   await page.route(`**/data/runs/${runId}/core.json*`,route=>route.fulfill({json:core}))
   await page.route(`**/data/runs/${runId}/details/*.json*`,route=>route.fulfill({json:details}))
   await page.route(`**/data/runs/${runId}/excluded.json*`,route=>route.fulfill({json:[{ticker:'ZZZ',scanOrder:0,price:2,stage:4,stageName:'Stage 4',tradeStatus:'not_tradeable',reasonCodes:['low_liquidity']}] }))
   await page.route(`**/data/runs/${runId}/history.json*`,route=>route.fulfill({json:[{runId,sessionDate:'2026-08-21',generatedAt,status:'healthy',coveragePct:99.8,candidateCount:2,excludedCount:1},{runId:'20260820-close',sessionDate:'2026-08-20',generatedAt,status:'degraded',coveragePct:96,candidateCount:2,excludedCount:2}] }))
+  await page.route(`**/data/runs/${runId}/charts/manifest.json*`,route=>route.fulfill({json:chartManifest}))
+  await page.route(`**/storage/v1/object/public/stockscout-eod-charts/${runId}/shards/001.json.gz*`,route=>route.fulfill({body:chartShard,contentType:'application/gzip'}))
   await page.route('**/data/validation-status.json*',route=>route.fulfill({status:404,body:''}))
 
   await page.goto(`/StockScout-EOD/ticker/AAA?run=${runId}`)
@@ -48,7 +65,7 @@ test('v1 EOD app is responsive, trade-safe and public-chart safe',async({page},t
   await expect(plan).toContainText('$46.00')
   await expect(page.getByLabel('Portfolio NAV')).toHaveValue('10000000')
   await expect(page.locator('.position-sizer')).toContainText('12,500')
-  await expect(page.locator('.dv-chartmsg a')).toHaveAttribute('href',/tradingview\.com/)
+  await expect(page.locator('.dv-chart')).toBeVisible()
 
   await page.locator('.dv-tablewrap tbody tr').filter({hasText:'BBB'}).click()
   await expect(page).toHaveURL(new RegExp(`/ticker/BBB\\?run=${runId}$`))
@@ -68,5 +85,7 @@ test('v1 EOD app is responsive, trade-safe and public-chart safe',async({page},t
   await expect(page.locator('.dv-market')).toContainText('2')
   await page.locator('.dv-top nav button').filter({hasText:/^Market$/}).evaluate((button:HTMLButtonElement)=>button.click())
   await expect(page.locator('.dv-market')).toContainText('Regime UNDER PRESSURE')
-  expect(privateRequests).toEqual([])
+  expect(supabaseRequests.length).toBeGreaterThan(0)
+  expect(supabaseRequests.every(url=>url.includes('/storage/v1/object/public/stockscout-eod-charts/'))).toBe(true)
+  expect(supabaseRequests.some(url=>url.includes('/auth/v1/'))).toBe(false)
 })

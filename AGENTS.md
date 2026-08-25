@@ -2,7 +2,7 @@
 
 Public, mobile-first end-of-day stock screener. The Python scanner produces a
 versioned, sanitized snapshot; the React/Vite PWA renders it on GitHub Pages.
-Owner-only state and chart data live behind Supabase RLS.
+Charts are login-free; personal owner state remains behind Supabase RLS.
 
 ## Non-negotiable rules
 
@@ -11,9 +11,10 @@ Owner-only state and chart data live behind Supabase RLS.
   change.
 - Ryan/LEGACY output is read-only confirmation and must never mutate the
   StockScout score or default order.
-- Public assets may contain derived scan fields, but never raw provider caches,
-  DuckDB files, local reports, credentials, personal state, or private chart
-  payloads.
+- Public assets may contain derived scan fields and the hashed current-run chart
+  index. The chart bucket may contain only the curated five-year EOD projection,
+  never provider caches, DuckDB files, local reports, credentials, or personal
+  state.
 - Sizing is enabled only for `entry_ready` candidates with a valid tactical
   stop. Legacy invalidation fields are not sizing fallbacks.
 - Scheduled scans run only after a completed US market session. Manual and test
@@ -26,7 +27,7 @@ Owner-only state and chart data live behind Supabase RLS.
 - Python: unit/contract tests and engine parity fixtures.
 - Frontend: Node tests, TypeScript build, and Pixel 5 + desktop Playwright.
 - Data: manifest/hash/cardinality/secret-path audit and chart coverage audit.
-- Supabase: owner/anon RLS negative tests, explicit grants, and advisors.
+- Supabase: anonymous chart GET plus denied anonymous writes/listing, owner-state
+  RLS negative tests, explicit grants, and advisors.
 
 Record meaningful changes and validation evidence in `docs/PROJECT_LOG.md`.
-

@@ -23,6 +23,8 @@ const DEFAULT_REPOSITORY = "Garrincha077/StockScout-EOD";
 const DEFAULT_REF = "refs/heads/main";
 const DEFAULT_WORKFLOW_REF =
   "Garrincha077/StockScout-EOD/.github/workflows/eod.yml@refs/heads/main";
+const DEFAULT_CHART_PROMOTION_WORKFLOW_REF =
+  "Garrincha077/StockScout-EOD/.github/workflows/promote-charts.yml@refs/heads/main";
 const DEFAULT_ENVIRONMENT = "production";
 const CHART_BUCKET = "stockscout-eod-charts";
 const MARKET_CACHE_BUCKET = "stockscout-eod-market-cache";
@@ -57,7 +59,7 @@ function bearerToken(request: Request): string | null {
   return /^Bearer\s+(.+)$/i.exec(header)?.[1] ?? null;
 }
 
-async function authorizeGithub(request: Request): Promise<void> {
+async function authorizeGithub(request: Request): Promise<string> {
   const token = bearerToken(request);
   if (!token) throw new Error("missing GitHub OIDC bearer token");
   const { payload } = await jwtVerify(token, GITHUB_JWKS, {
@@ -71,6 +73,9 @@ async function authorizeGithub(request: Request): Promise<void> {
   const expectedWorkflowRef =
     Deno.env.get("STOCKSCOUT_GITHUB_WORKFLOW_REF")?.trim() ||
     DEFAULT_WORKFLOW_REF;
+  const expectedChartPromotionWorkflowRef =
+    Deno.env.get("STOCKSCOUT_GITHUB_CHART_PROMOTION_WORKFLOW_REF")?.trim() ||
+    DEFAULT_CHART_PROMOTION_WORKFLOW_REF;
   const expectedEnvironment =
     Deno.env.get("STOCKSCOUT_GITHUB_ENVIRONMENT")?.trim() ||
     DEFAULT_ENVIRONMENT;
@@ -78,12 +83,16 @@ async function authorizeGithub(request: Request): Promise<void> {
   if (
     payload.repository !== expectedRepository ||
     payload.ref !== expectedRef ||
-    payload.workflow_ref !== expectedWorkflowRef ||
+    !new Set([
+      expectedWorkflowRef,
+      expectedChartPromotionWorkflowRef,
+    ]).has(String(payload.workflow_ref ?? "")) ||
     payload.environment !== expectedEnvironment ||
     payload.ref_protected !== "true"
   ) {
     throw new Error("GitHub OIDC claims do not match the production publisher");
   }
+  return String(payload.workflow_ref);
 }
 
 async function readJson(request: Request): Promise<JsonObject> {
@@ -141,7 +150,6 @@ function decodeBase64(value: unknown): Uint8Array {
 async function putBlob(
   database: any,
   body: JsonObject,
-  ownerId: string,
 ): Promise<JsonObject> {
   const kind = body.kind;
   const runId = requiredString(body, "runId", /^[A-Za-z0-9._:-]{1,100}$/);
@@ -158,16 +166,16 @@ async function putBlob(
     // workflow uses chart-shard + chart-manifest below.
     const ticker = requiredString(body, "ticker", /^[A-Z0-9._-]{1,20}$/);
     bucket = CHART_BUCKET;
-    path = `${ownerId}/${runId}/${ticker}.json.gz`;
+    path = `${runId}/${ticker}.json.gz`;
     sizeLimit = MAX_CHART_BYTES;
   } else if (kind === "chart-shard") {
     const shard = requiredString(body, "shard", /^\d{3,6}$/);
     bucket = CHART_BUCKET;
-    path = `${ownerId}/${runId}/shards/${shard}.json.gz`;
+    path = `${runId}/shards/${shard}.json.gz`;
     sizeLimit = MAX_CHART_BYTES;
   } else if (kind === "chart-manifest") {
     bucket = CHART_BUCKET;
-    path = `${ownerId}/${runId}/manifest.json`;
+    path = `${runId}/manifest.json`;
     sizeLimit = MAX_CHART_MANIFEST_BYTES;
     contentType = "application/json";
   } else if (kind === "market-cache") {
@@ -192,15 +200,7 @@ async function putBlob(
     throw new Error("blob content hash mismatch");
   }
   if (kind === "chart-manifest") {
-    const manifest: unknown = JSON.parse(new TextDecoder().decode(bytes));
-    if (
-      !manifest ||
-      typeof manifest !== "object" ||
-      Array.isArray(manifest) ||
-      (manifest as JsonObject).runId !== runId
-    ) {
-      throw new Error("chart manifest is invalid or belongs to another run");
-    }
+    parseChartManifest(bytes, runId, "stockscout-eod/charts-v1");
   }
 
   const { error } = await database.storage.from(bucket).upload(path, bytes, {
@@ -227,68 +227,452 @@ async function getMarketCacheUrl(
   return { path, signedUrl: data.signedUrl, expiresIn: 300 };
 }
 
-async function pruneChartRun(
+type ChartShardRecord = {
+  name: string;
+  sha256: string;
+  bytes: number;
+  tickerCount: number;
+};
+
+type ChartManifest = JsonObject & {
+  schemaVersion: string;
+  runId: string;
+  requested: number;
+  available: number;
+  coveragePct: number;
+  shards: ChartShardRecord[];
+  shardsByTicker: Record<string, string>;
+  storageBaseUrl?: string;
+};
+
+function chartStorageBaseUrl(runId: string): string {
+  return `${
+    requiredEnv("SUPABASE_URL").replace(/\/$/, "")
+  }/storage/v1/object/public/${CHART_BUCKET}/${runId}`;
+}
+
+function isStorageNotFound(error: any): boolean {
+  const status = Number(error?.statusCode ?? error?.status ?? 0);
+  return status === 404 ||
+    /not found|not_found|no such/i.test(String(error?.message ?? ""));
+}
+
+function storedObjectSize(item: any): number | null {
+  const raw = item?.metadata?.size ?? item?.metadata?.contentLength ??
+    item?.size;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function storedObjectHash(item: any): string | null {
+  const value = item?.user_metadata?.sha256 ?? item?.userMetadata?.sha256 ??
+    item?.metadata?.sha256;
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value)
+    ? value
+    : null;
+}
+
+async function listStorageFiles(database: any, prefix: string): Promise<any[]> {
+  const files: any[] = [];
+  for (let offset = 0; offset < 10_000; offset += 1000) {
+    const { data, error } = await database.storage.from(CHART_BUCKET).list(
+      prefix,
+      { limit: 1000, offset, sortBy: { column: "name", order: "asc" } },
+    );
+    if (error) {
+      throw new Error(`chart listing failed for ${prefix}: ${error.message}`);
+    }
+    const page = data ?? [];
+    files.push(...page.filter((item: any) => item.id !== null));
+    if (page.length < 1000) return files;
+  }
+  throw new Error(`chart listing safety limit reached for ${prefix}`);
+}
+
+async function downloadStorageObject(
+  database: any,
+  path: string,
+): Promise<Uint8Array | null> {
+  const { data, error } = await database.storage.from(CHART_BUCKET).download(
+    path,
+  );
+  if (error) {
+    if (isStorageNotFound(error)) return null;
+    throw new Error(`chart download failed for ${path}: ${error.message}`);
+  }
+  return new Uint8Array(await data.arrayBuffer());
+}
+
+function parseChartManifest(
+  bytes: Uint8Array,
+  runId: string,
+  expectedSchema: string,
+): ChartManifest {
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_CHART_MANIFEST_BYTES) {
+    throw new Error("chart manifest is empty or exceeds its size limit");
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new Error("chart manifest is not valid JSON");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("chart manifest must be an object");
+  }
+  const manifest = value as ChartManifest;
+  if (manifest.schemaVersion !== expectedSchema || manifest.runId !== runId) {
+    throw new Error("chart manifest schema or runId mismatch");
+  }
+  if (
+    !Number.isInteger(manifest.requested) || manifest.requested < 1 ||
+    !Number.isInteger(manifest.available) || manifest.available < 1 ||
+    manifest.requested !== manifest.available || manifest.coveragePct !== 100
+  ) {
+    throw new Error("chart manifest does not provide complete coverage");
+  }
+  if (
+    !Array.isArray(manifest.shards) || manifest.shards.length < 1 ||
+    manifest.shards.length > 1000
+  ) {
+    throw new Error("chart manifest shard list is invalid");
+  }
+  if (
+    !manifest.shardsByTicker || typeof manifest.shardsByTicker !== "object" ||
+    Array.isArray(manifest.shardsByTicker)
+  ) {
+    throw new Error("chart manifest ticker map is invalid");
+  }
+
+  const names = new Set<string>();
+  let tickerCount = 0;
+  for (const shard of manifest.shards) {
+    if (
+      !shard || typeof shard !== "object" ||
+      !/^\d{3,6}$/.test(shard.name) || names.has(shard.name) ||
+      !/^[0-9a-f]{64}$/.test(shard.sha256) ||
+      !Number.isInteger(shard.bytes) || shard.bytes < 1 ||
+      shard.bytes > MAX_CHART_BYTES ||
+      !Number.isInteger(shard.tickerCount) || shard.tickerCount < 0
+    ) {
+      throw new Error("chart manifest contains an invalid shard");
+    }
+    names.add(shard.name);
+    tickerCount += shard.tickerCount;
+  }
+  const tickerEntries = Object.entries(manifest.shardsByTicker);
+  if (
+    tickerEntries.length !== manifest.available ||
+    tickerCount !== manifest.available ||
+    tickerEntries.some(([ticker, shard]) => !ticker || !names.has(shard))
+  ) {
+    throw new Error("chart manifest ticker map does not reconcile with shards");
+  }
+  if (
+    expectedSchema === "stockscout-eod/charts-v1" &&
+    manifest.storageBaseUrl !== chartStorageBaseUrl(runId)
+  ) {
+    throw new Error("public chart manifest storageBaseUrl mismatch");
+  }
+  return manifest;
+}
+
+function validateListedChartShards(
+  files: any[],
+  manifest: ChartManifest,
+  label: string,
+): void {
+  const byName = new Map(files.map((item) => [String(item.name), item]));
+  const expectedNames = new Set(
+    manifest.shards.map((item) => `${item.name}.json.gz`),
+  );
+  if (
+    byName.size !== expectedNames.size ||
+    [...byName.keys()].some((name) => !expectedNames.has(name))
+  ) {
+    throw new Error(`${label} shard list does not match its manifest`);
+  }
+  for (const shard of manifest.shards) {
+    const item = byName.get(`${shard.name}.json.gz`);
+    const size = storedObjectSize(item);
+    const hash = storedObjectHash(item);
+    if (size !== null && size !== shard.bytes) {
+      throw new Error(`${label} chart shard size mismatch: ${shard.name}`);
+    }
+    if (hash !== null && hash !== shard.sha256) {
+      throw new Error(`${label} chart shard hash mismatch: ${shard.name}`);
+    }
+  }
+}
+
+async function verifyChartRunObjects(
+  database: any,
+  prefix: string,
+  manifest: ChartManifest,
+): Promise<void> {
+  const rootFiles = await listStorageFiles(database, prefix);
+  if (rootFiles.length !== 1 || rootFiles[0]?.name !== "manifest.json") {
+    throw new Error(`chart run ${prefix} has unexpected root objects`);
+  }
+  validateListedChartShards(
+    await listStorageFiles(database, `${prefix}/shards`),
+    manifest,
+    prefix,
+  );
+}
+
+async function copyChartShardBatch(
+  database: any,
+  sourcePrefix: string,
+  destinationPrefix: string,
+  manifest: ChartManifest,
+): Promise<number> {
+  const destinationFiles = await listStorageFiles(
+    database,
+    `${destinationPrefix}/shards`,
+  );
+  const destinationByName = new Map(
+    destinationFiles.map((item) => [String(item.name), item]),
+  );
+  let copied = 0;
+  for (let offset = 0; offset < manifest.shards.length; offset += 12) {
+    const batch = manifest.shards.slice(offset, offset + 12);
+    await Promise.all(batch.map(async (shard) => {
+      const filename = `${shard.name}.json.gz`;
+      const existing = destinationByName.get(filename);
+      if (existing) {
+        const size = storedObjectSize(existing);
+        const hash = storedObjectHash(existing);
+        if (
+          (size !== null && size !== shard.bytes) ||
+          (hash !== null && hash !== shard.sha256)
+        ) {
+          throw new Error(
+            `canonical chart shard conflicts with source: ${shard.name}`,
+          );
+        }
+        return;
+      }
+      const { error } = await database.storage.from(CHART_BUCKET).copy(
+        `${sourcePrefix}/shards/${filename}`,
+        `${destinationPrefix}/shards/${filename}`,
+      );
+      if (error) {
+        throw new Error(
+          `chart shard copy failed: ${shard.name}: ${error.message}`,
+        );
+      }
+      copied += 1;
+    }));
+  }
+  validateListedChartShards(
+    await listStorageFiles(database, `${destinationPrefix}/shards`),
+    manifest,
+    destinationPrefix,
+  );
+  return copied;
+}
+
+async function removeLegacyChartRun(
+  database: any,
+  prefix: string,
+  manifest: ChartManifest,
+): Promise<number> {
+  const rootFiles = await listStorageFiles(database, prefix);
+  const shardFiles = await listStorageFiles(database, `${prefix}/shards`);
+  const expectedShards = new Set(
+    manifest.shards.map((shard) => `${shard.name}.json.gz`),
+  );
+  if (
+    rootFiles.some((item) => item.name !== "manifest.json") ||
+    shardFiles.some((item) => !expectedShards.has(String(item.name)))
+  ) {
+    throw new Error("legacy chart prefix contains unexpected objects");
+  }
+  const paths = [
+    ...rootFiles.map((item) => `${prefix}/${item.name}`),
+    ...shardFiles.map((item) => `${prefix}/shards/${item.name}`),
+  ];
+  if (paths.length === 0) return 0;
+  const { error } = await database.storage.from(CHART_BUCKET).remove(paths);
+  if (error) throw new Error(`legacy chart cleanup failed: ${error.message}`);
+  return paths.length;
+}
+
+async function promoteChartRun(
   database: any,
   body: JsonObject,
   ownerId: string,
 ): Promise<JsonObject> {
   const runId = requiredString(body, "runId", /^[A-Za-z0-9._:-]{1,100}$/);
-  const { data: latest, error: latestError } = await database
-    .from("eod_latest_scan")
-    .select("run_id")
-    .maybeSingle();
-  if (latestError) {
-    throw new Error(`active scan lookup failed: ${latestError.message}`);
-  }
-  const active = latest as { run_id?: string } | null;
-  if (active?.run_id === runId) {
-    throw new Error("refusing to prune the active chart run");
+  const sourcePrefix = `${ownerId}/${runId}`;
+  const destinationPrefix = runId;
+  const sourcePath = `${sourcePrefix}/manifest.json`;
+  const destinationPath = `${destinationPrefix}/manifest.json`;
+  const sourceBytes = await downloadStorageObject(database, sourcePath);
+
+  if (sourceBytes === null) {
+    const canonicalBytes = await downloadStorageObject(
+      database,
+      destinationPath,
+    );
+    if (canonicalBytes === null) {
+      throw new Error("legacy and canonical chart manifests are missing");
+    }
+    const canonical = parseChartManifest(
+      canonicalBytes,
+      runId,
+      "stockscout-eod/charts-v1",
+    );
+    await verifyChartRunObjects(database, destinationPrefix, canonical);
+    const legacyRemoved = await removeLegacyChartRun(
+      database,
+      sourcePrefix,
+      canonical,
+    );
+    return {
+      runId,
+      status: "already_promoted",
+      copiedShards: 0,
+      legacyRemoved,
+    };
   }
 
-  const prefix = `${ownerId}/${runId}`;
+  const legacy = parseChartManifest(
+    sourceBytes,
+    runId,
+    "stockscout-eod/private-charts-v1",
+  );
+  await verifyChartRunObjects(database, sourcePrefix, legacy);
+  const canonicalObject: ChartManifest = {
+    ...legacy,
+    schemaVersion: "stockscout-eod/charts-v1",
+    storageBaseUrl: chartStorageBaseUrl(runId),
+  };
+  const canonicalBytes = new TextEncoder().encode(
+    jcsStringify(canonicalObject),
+  );
+  const canonicalHash = await sha256Hex(canonicalBytes);
+  const copiedShards = await copyChartShardBatch(
+    database,
+    sourcePrefix,
+    destinationPrefix,
+    canonicalObject,
+  );
+
+  const existingManifest = await downloadStorageObject(
+    database,
+    destinationPath,
+  );
+  if (existingManifest !== null) {
+    if ((await sha256Hex(existingManifest)) !== canonicalHash) {
+      throw new Error("canonical chart manifest conflicts with legacy source");
+    }
+  } else {
+    const { error } = await database.storage.from(CHART_BUCKET).upload(
+      destinationPath,
+      canonicalBytes,
+      {
+        upsert: false,
+        contentType: "application/json",
+        cacheControl: "31536000",
+        metadata: { sha256: canonicalHash, runId },
+      },
+    );
+    if (error) {
+      throw new Error(
+        `canonical chart manifest upload failed: ${error.message}`,
+      );
+    }
+  }
+
+  const committedBytes = await downloadStorageObject(database, destinationPath);
+  if (
+    committedBytes === null ||
+    (await sha256Hex(committedBytes)) !== canonicalHash
+  ) {
+    throw new Error("canonical chart manifest commit verification failed");
+  }
+  const committed = parseChartManifest(
+    committedBytes,
+    runId,
+    "stockscout-eod/charts-v1",
+  );
+  await verifyChartRunObjects(database, destinationPrefix, committed);
+
+  const legacyRemoved = await removeLegacyChartRun(
+    database,
+    sourcePrefix,
+    legacy,
+  );
+  return {
+    runId,
+    status: "promoted",
+    copiedShards,
+    legacyRemoved,
+    manifestHash: canonicalHash,
+  };
+}
+
+async function activeCloudRunId(database: any): Promise<string | null> {
+  const { data, error } = await database.from("eod_latest_scan").select(
+    "run_id",
+  )
+    .maybeSingle();
+  if (error) throw new Error(`active scan lookup failed: ${error.message}`);
+  const value = (data as { run_id?: string } | null)?.run_id;
+  return typeof value === "string" && value ? value : null;
+}
+
+async function removeCanonicalChartRun(
+  database: any,
+  runId: string,
+): Promise<number> {
+  const prefix = runId;
   let removed = 0;
   while (removed < 10_000) {
-    const { data, error } = await database.storage
-      .from(CHART_BUCKET)
-      .list(prefix, {
-        limit: 1000,
-        offset: 0,
-        sortBy: { column: "name", order: "asc" },
-      });
-    if (error) throw new Error(`chart listing failed: ${error.message}`);
-    const rootPaths = (data ?? [])
-      .filter((item: { id: string | null }) => item.id !== null)
-      .map((item: { name: string }) => `${prefix}/${item.name}`);
-    const { data: shardData, error: shardError } = await database.storage
-      .from(CHART_BUCKET)
-      .list(`${prefix}/shards`, {
-        limit: 1000,
-        offset: 0,
-        sortBy: { column: "name", order: "asc" },
-      });
-    if (shardError) {
-      throw new Error(`chart shard listing failed: ${shardError.message}`);
-    }
-    const shardPaths = (shardData ?? [])
-      .filter((item: { id: string | null }) => item.id !== null)
-      .map((item: { name: string }) => `${prefix}/shards/${item.name}`);
+    const rootPaths = (await listStorageFiles(database, prefix)).map((item) =>
+      `${prefix}/${item.name}`
+    );
+    const shardPaths = (await listStorageFiles(database, `${prefix}/shards`))
+      .map(
+        (item) => `${prefix}/shards/${item.name}`,
+      );
     const paths = [...rootPaths, ...shardPaths];
     if (paths.length === 0) break;
-    const { error: removeError } = await database.storage.from(CHART_BUCKET)
-      .remove(paths);
-    if (removeError) {
-      throw new Error(`chart pruning failed: ${removeError.message}`);
-    }
+    const { error } = await database.storage.from(CHART_BUCKET).remove(paths);
+    if (error) throw new Error(`chart pruning failed: ${error.message}`);
     removed += paths.length;
   }
   if (removed >= 10_000) throw new Error("chart prune safety limit reached");
-  return { runId, removed };
+  return removed;
+}
+
+async function pruneChartRun(
+  database: any,
+  body: JsonObject,
+): Promise<JsonObject> {
+  const runId = requiredString(body, "runId", /^[A-Za-z0-9._:-]{1,100}$/);
+  const protectedRunId = body.protectedRunId === undefined
+    ? null
+    : requiredString(body, "protectedRunId", /^[A-Za-z0-9._:-]{1,100}$/);
+  const activeRunId = await activeCloudRunId(database);
+  if (runId === activeRunId || runId === protectedRunId) {
+    throw new Error("refusing to prune a protected chart run");
+  }
+  return { runId, removed: await removeCanonicalChartRun(database, runId) };
 }
 
 async function cleanupCloud(
   database: any,
+  body: JsonObject,
   ownerId: string,
 ): Promise<JsonObject> {
+  const protectedRunId = requiredString(
+    body,
+    "protectedRunId",
+    /^[A-Za-z0-9._:-]{1,100}$/,
+  );
   const cleanup = await database.rpc("eod_cleanup_abandoned_publish");
   if (cleanup.error) {
     throw new Error(
@@ -296,26 +680,17 @@ async function cleanupCloud(
     );
   }
 
-  const { data: latest, error: latestError } = await database
-    .from("eod_latest_scan")
-    .select("run_id")
-    .maybeSingle();
-  if (latestError) {
-    throw new Error(`active scan lookup failed: ${latestError.message}`);
-  }
-  const activeRunId = (latest as { run_id?: string } | null)?.run_id;
-  if (!activeRunId) {
-    return {
-      abandonedUploadsRemoved: Number(cleanup.data ?? 0),
-      activeRunId: null,
-      chartRunsPruned: [],
-    };
-  }
+  const activeRunId = await activeCloudRunId(database);
+  const protectedRuns = new Set(
+    [activeRunId, protectedRunId].filter((value): value is string =>
+      Boolean(value)
+    ),
+  );
 
   const chartRuns: string[] = [];
   for (let offset = 0; offset < 10_000; offset += 1000) {
     const { data, error } = await database.storage.from(CHART_BUCKET).list(
-      ownerId,
+      "",
       {
         limit: 1000,
         offset,
@@ -327,7 +702,8 @@ async function cleanupCloud(
     for (const item of page as Array<{ id: string | null; name: string }>) {
       if (
         item.id === null &&
-        item.name !== activeRunId &&
+        item.name !== ownerId &&
+        !protectedRuns.has(item.name) &&
         /^[A-Za-z0-9._:-]{1,100}$/.test(item.name)
       ) {
         chartRuns.push(item.name);
@@ -341,11 +717,15 @@ async function cleanupCloud(
 
   const pruned: JsonObject[] = [];
   for (const runId of chartRuns) {
-    pruned.push(await pruneChartRun(database, { runId }, ownerId));
+    pruned.push({
+      runId,
+      removed: await removeCanonicalChartRun(database, runId),
+    });
   }
   return {
     abandonedUploadsRemoved: Number(cleanup.data ?? 0),
     activeRunId,
+    protectedPagesRunId: protectedRunId,
     chartRunsPruned: pruned,
   };
 }
@@ -587,9 +967,18 @@ Deno.serve(async (request: Request) => {
     return json(405, { error: "method_not_allowed" });
   }
   try {
-    await authorizeGithub(request);
+    const workflowRef = await authorizeGithub(request);
     const body = await readJson(request);
     const action = body.action;
+    const chartPromotionWorkflowRef =
+      Deno.env.get("STOCKSCOUT_GITHUB_CHART_PROMOTION_WORKFLOW_REF")?.trim() ||
+      DEFAULT_CHART_PROMOTION_WORKFLOW_REF;
+    if (
+      workflowRef === chartPromotionWorkflowRef &&
+      action !== "promote_chart_run"
+    ) {
+      throw new Error("chart promotion workflow may only promote a chart run");
+    }
     const database = createClient(
       requiredEnv("SUPABASE_URL"),
       requiredEnv("SUPABASE_SERVICE_ROLE_KEY"),
@@ -695,13 +1084,15 @@ Deno.serve(async (request: Request) => {
       }
       data = response.data;
     } else if (action === "put_blob") {
-      data = await putBlob(database, body, ownerId);
+      data = await putBlob(database, body);
     } else if (action === "get_market_cache") {
       data = await getMarketCacheUrl(database, body);
+    } else if (action === "promote_chart_run") {
+      data = await promoteChartRun(database, body, ownerId);
     } else if (action === "prune_chart_run") {
-      data = await pruneChartRun(database, body, ownerId);
+      data = await pruneChartRun(database, body);
     } else if (action === "cleanup") {
-      data = await cleanupCloud(database, ownerId);
+      data = await cleanupCloud(database, body, ownerId);
     } else if (action === "delivery_get") {
       data = await getDeliveryState(database, body, ownerId);
     } else if (action === "delivery_progress") {

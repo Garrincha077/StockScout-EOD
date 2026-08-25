@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from stock_scout.data.cache import ParquetCache
-from stockscout_eod.charts import build_private_chart_staging
+from stockscout_eod.charts import build_chart_staging
 from tests.test_artifacts import _scan
 
 
@@ -26,7 +26,7 @@ def _bars(periods: int, frequency: str) -> pd.DataFrame:
     )
 
 
-def test_private_chart_shards_are_compact_gzipped_and_never_public(tmp_path) -> None:
+def test_chart_shards_are_compact_gzipped_and_staged_outside_pages(tmp_path) -> None:
     cache_dir = tmp_path / "cache"
     cache = ParquetCache(cache_dir)
     cache.write(_bars(300, "B"), "fixture", "AAA", "daily")
@@ -40,14 +40,21 @@ def test_private_chart_shards_are_compact_gzipped_and_never_public(tmp_path) -> 
     for row in [*scan.candidates, *scan.excluded]:
         row["provider_used"] = "fixture"
 
-    destination = tmp_path / "private-staging"
-    manifest = build_private_chart_staging(
-        scan, config_path=config, output_dir=destination
+    destination = tmp_path / "chart-staging"
+    manifest = build_chart_staging(
+        scan,
+        config_path=config,
+        output_dir=destination,
+        storage_base_url=(
+            "https://fixture.supabase.co/storage/v1/object/public/"
+            f"stockscout-eod-charts/{scan.run_id}"
+        ),
     )
     assert manifest.requested == 3
     assert manifest.available == 1
     assert manifest.coverage_pct == 33.33
     assert set(manifest.shards_by_ticker) == {"AAA"}
+    assert manifest.storage_base_url.endswith(scan.run_id)
     assert all(shard.bytes < 5 * 1024 * 1024 for shard in manifest.shards)
 
     populated = next(shard for shard in manifest.shards if shard.ticker_count)
@@ -56,13 +63,19 @@ def test_private_chart_shards_are_compact_gzipped_and_never_public(tmp_path) -> 
     assert manifest.shards_by_ticker["AAA"] == populated.name
     assert rows["AAA"]["columns"] == ["t", "o", "h", "l", "c", "v"]
     assert len(rows["AAA"]["daily"]) == 300
+    assert 50 <= len(rows["AAA"]["weekly"]) <= 65
     assert not (tmp_path / "public").exists()
 
 
-def test_private_chart_builder_rejects_public_destination(tmp_path) -> None:
-    with pytest.raises(ValueError, match="never be inside a public"):
-        build_private_chart_staging(
-            _scan(),
+def test_chart_builder_rejects_pages_public_destination(tmp_path) -> None:
+    scan = _scan()
+    with pytest.raises(ValueError, match="outside the Pages public"):
+        build_chart_staging(
+            scan,
             config_path="config/eod.yaml",
-            output_dir=tmp_path / "frontend" / "public" / "private-charts",
+            output_dir=tmp_path / "frontend" / "public" / "charts",
+            storage_base_url=(
+                "https://fixture.supabase.co/storage/v1/object/public/"
+                f"stockscout-eod-charts/{scan.run_id}"
+            ),
         )

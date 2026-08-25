@@ -9,9 +9,10 @@ The public application is published at
 after the first healthy production scan. The read-only ChatGPT MCP endpoint is
 `https://stockscout-paper.vercel.app/mcp`.
 
-The public PWA exposes the latest sanitized scan and a compact 252-session
-history. Owner authentication unlocks synchronized watchlists, saved screens,
-drawings, EOD alerts, and private custom chart data.
+The PWA exposes the latest sanitized scan, compact 252-session history, and
+lazy-loaded five-year EOD charts without requiring sign-in. Owner
+authentication is only for synchronized watchlists, saved screens, drawings,
+and EOD alerts.
 
 ## Product invariants
 
@@ -64,10 +65,10 @@ market caches are deliberately excluded from Git.
 
 ## Owner access
 
-Anonymous users can inspect derived scan/setup data and open an external chart.
-The single allowlisted Supabase owner can sign in to use private chart shards,
-watchlists, saved screens, drawings, and EOD alerts. Sizing remains disabled
-unless `trade_plan.status` is `entry_ready` and a valid tactical stop exists.
+Charts and derived scan/setup data are available immediately. The single
+allowlisted Supabase owner signs in only for watchlists, saved screens,
+drawings, and EOD alerts. Sizing remains disabled unless
+`trade_plan.status` is `entry_ready` and a valid tactical stop exists.
 
 Owner password recovery requires this Supabase Auth redirect allowlist entry:
 
@@ -81,6 +82,6 @@ This project is for personal research and informational use. It is not
 investment advice, a broker, or a guarantee of future results. Transcribed
 setup rules are labeled separately from preregistered empirical evidence.
 
-Raw provider market data is not published as a public repository asset.
-Custom OHLCV charts are owner-only unless a provider license explicitly allows
-public redistribution.
+Raw provider caches are never committed to Git or exposed as downloadable
+archives. The app publishes only the current run's compact five-year OHLCV
+chart projection through read-only object URLs; personal state remains private.

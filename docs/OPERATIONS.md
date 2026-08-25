@@ -5,9 +5,9 @@
 The `StockScout EOD` GitHub workflow is the production operator. It restores a
 private content-addressed market cache, obtains EOD data, runs the frozen
 StockScout engine, executes Ryan/LEGACY as a shadow-only confirmation, verifies
-the scan, builds private chart shards and derived public assets, deploys GitHub
-Pages, atomically activates Supabase/MCP, evaluates supported owner alerts, and
-optionally sends the resumable multipart Telegram digest.
+the scan, builds public read-only chart shards and derived Pages assets,
+deploys GitHub Pages, atomically activates Supabase/MCP, evaluates supported
+owner alerts, and optionally sends the resumable multipart Telegram digest.
 
 The workflow has two weekday schedules, at 20:45 and 21:45 UTC. The exchange
 calendar and active-run ledger decide whether either attempt may run. Only
@@ -40,8 +40,9 @@ delivery is intended. Test and fixture scans always use `--no-notify`.
   enabled, its header marks that the ChatGPT index is stale.
 - Telegram parts are numbered, sent sequentially, deduplicated by content hash,
   and resumed from the last confirmed part.
-- Private charts and market cache never enter Pages or Git. Newly orphaned
-  private chart runs are cleaned after a failed run.
+- Chart shards and the private market cache never enter Pages or Git. Cleanup
+  preserves both the cloud-active run and the exact run deployed on Pages;
+  other canonical chart runs are removed after a later successful workflow.
 
 ## Five-session parity ledger
 
@@ -69,7 +70,7 @@ runtime data outside Git.
 Do not enable scheduled Telegram or declare the new app canonical until:
 
 1. five consecutive session comparisons are green;
-2. owner chart coverage is 100% for every run;
+2. chart coverage is 100% for every run and unauthenticated retrieval passes;
 3. every selected Telegram ticker exists in the recombined parts;
 4. MCP and Pages report the same `run_id` and manifest hash;
 5. Pixel 5 and desktop E2E checks pass.

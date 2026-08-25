@@ -7,7 +7,8 @@ import pytest
 from stock_scout.scoring.focus_blend import candidate_blend_score
 from stock_scout.scoring.models import Candidate
 from stockscout_eod.artifacts import build_public_snapshot, verify_public_snapshot
-from stockscout_eod.contracts import RawScanEnvelopeV1
+from stockscout_eod.contracts import ChartManifestV1, ChartShardV1, RawScanEnvelopeV1, wire_dump
+from stockscout_eod.jsonio import write_json
 
 
 def _candidate(ticker: str, status: str = "entry_ready") -> dict:
@@ -122,6 +123,59 @@ def test_public_snapshot_is_immutable_hashed_and_contains_no_charts(tmp_path) ->
         assert detail["rsRank"] == row["rsRank"]
         assert detail["tradePlan"] == row["tradePlan"]
         assert detail["setupHits"]["rwb_squeeze_thrust"]["triggered"] is True
+
+
+def test_public_snapshot_exposes_a_hashed_chart_index_without_embedding_bars(tmp_path) -> None:
+    scan = _scan()
+    chart_manifest = ChartManifestV1(
+        runId=scan.run_id,
+        sessionDate=scan.session_date,
+        generatedAt=scan.generated_at,
+        priceMode=scan.price_mode,
+        requested=3,
+        available=3,
+        coveragePct=100,
+        storageBaseUrl=(
+            "https://fixture.supabase.co/storage/v1/object/public/"
+            f"stockscout-eod-charts/{scan.run_id}"
+        ),
+        shards=[
+            ChartShardV1(name="001", sha256="a" * 64, bytes=123, tickerCount=3)
+        ],
+        shardsByTicker={"AAA": "001", "BBB": "001", "CCC": "001"},
+    )
+    source = tmp_path / "charts.json"
+    write_json(source, wire_dump(chart_manifest))
+    public = tmp_path / "public"
+    manifest = build_public_snapshot(
+        scan,
+        public_dir=public,
+        min_universe=3,
+        allow_fixture=True,
+        chart_status="ready",
+        chart_manifest=source,
+    )
+
+    verified = verify_public_snapshot(public)
+    descriptor = verified.assets["charts"]
+    chart_index = json.loads((public / "data" / descriptor.path).read_text())
+    assert manifest.chart_status == "ready"
+    assert descriptor.count == 3
+    assert descriptor.coverage_pct == 100
+    assert chart_index["storageBaseUrl"].endswith(scan.run_id)
+    assert chart_index["shardsByTicker"]["AAA"] == "001"
+    assert "daily" not in json.dumps(chart_index)
+
+
+def test_ready_chart_status_requires_the_matching_complete_manifest(tmp_path) -> None:
+    with pytest.raises(ValueError, match="requires a chart manifest"):
+        build_public_snapshot(
+            _scan(),
+            public_dir=tmp_path / "public",
+            min_universe=3,
+            allow_fixture=True,
+            chart_status="ready",
+        )
 
 
 def test_serialized_blend_and_headline_rank_match_frozen_candidate_model(tmp_path) -> None:

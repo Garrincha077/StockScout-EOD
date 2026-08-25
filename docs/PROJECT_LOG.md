@@ -218,3 +218,24 @@
   errors. Python passed 142 tests with 2 intentional skips, Ruff passed,
   frontend passed 48 Node tests, production build and all 10 Pixel 5/desktop
   Playwright cases.
+
+## 2026-08-25 — Login-free current-run charts
+
+- Removed chart loading from owner authentication. The PWA now resolves a
+  hashed chart index and immutable gzip shards without a Supabase session;
+  owner login remains only for watchlists, saved screens, drawings and alerts.
+- Chart publication now uses non-personal `{run_id}` Storage prefixes. A
+  narrowly pinned OIDC workflow can promote the existing owner-prefixed active
+  run once, verifies the canonical manifest/shards, and removes legacy objects
+  only after the public commit is complete.
+- Added a migration that makes only `stockscout-eod-charts` publicly retrievable.
+  Browser listing and writes remain denied, while the raw market-cache bucket
+  and all personal tables remain private. Cleanup protects both the cloud-active
+  run and the exact Pages run.
+- Limited published chart data to five years of daily OHLCV and weekly bars
+  derived from that window. Shard bytes remain outside Git/Pages; Pages carries
+  only the chart manifest and hashes.
+- Local evidence: 32 focused Python artifact/security tests passed, 49 frontend
+  Node tests and the production build passed, and all 10 Pixel 5/desktop
+  Playwright cases passed. Production migration, Edge deployment and live
+  anonymous chart verification remain explicit final cutover gates.

@@ -9,6 +9,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = next((ROOT / "supabase" / "migrations").glob("*_stockscout_eod_cloud_security.sql"))
+PUBLIC_CHART_MIGRATION = next(
+    (ROOT / "supabase" / "migrations").glob("*_public_chart_bucket.sql")
+)
 FACADE_MIGRATION = next(
     (ROOT / "supabase" / "migrations").glob("*_eod_edge_owner_api.sql")
 )
@@ -20,6 +23,10 @@ DATABASE_FUNCTION = (
     ROOT / "supabase" / "functions" / "stockscout-eod-publish" / "database.ts"
 )
 ALERTS_FUNCTION = ROOT / "supabase" / "functions" / "stockscout-eod-publish" / "alerts.ts"
+EOD_WORKFLOW = ROOT / ".github" / "workflows" / "eod.yml"
+CHART_PROMOTION_WORKFLOW = (
+    ROOT / ".github" / "workflows" / "promote-charts.yml"
+)
 JCS_FIXTURE = (
     ROOT / "supabase" / "functions" / "stockscout-eod-publish" / "jcs_fixture.json"
 )
@@ -83,10 +90,19 @@ class CloudSecurityContractTest(unittest.TestCase):
 
     def test_storage_access_models_are_distinct(self) -> None:
         sql = MIGRATION.read_text(encoding="utf-8").lower()
+        public_chart_sql = PUBLIC_CHART_MIGRATION.read_text(encoding="utf-8").lower()
         self.assertIn("'stockscout-eod-charts'", sql)
         self.assertIn("create policy eod_chart_owner_read", sql)
         self.assertIn("'stockscout-eod-market-cache'", sql)
         self.assertNotIn("create policy eod_market_cache", sql)
+        self.assertIn("set public = true", public_chart_sql)
+        self.assertIn("drop policy if exists eod_chart_owner_read", public_chart_sql)
+        self.assertIn(
+            "id = 'stockscout-eod-market-cache' and public = false", public_chart_sql
+        )
+        self.assertNotIn("for insert", public_chart_sql)
+        self.assertNotIn("for update", public_chart_sql)
+        self.assertNotIn("for delete", public_chart_sql)
 
     def test_edge_function_pins_oidc_claims_and_hashes_blobs(self) -> None:
         source = FUNCTION.read_text(encoding="utf-8")
@@ -102,6 +118,65 @@ class CloudSecurityContractTest(unittest.TestCase):
         self.assertIn("blob content hash mismatch", source)
         self.assertIn('if (shard === "manifest") cacheControl = "0"', source)
         self.assertNotIn("SUPABASE_SERVICE_ROLE_KEY=", source)
+
+    def test_chart_storage_uses_canonical_run_paths_and_safe_promotion(self) -> None:
+        source = FUNCTION.read_text(encoding="utf-8")
+        self.assertIn('path = `${runId}/shards/${shard}.json.gz`', source)
+        self.assertIn('path = `${runId}/manifest.json`', source)
+        self.assertIn('action === "promote_chart_run"', source)
+        self.assertIn('schemaVersion: "stockscout-eod/charts-v1"', source)
+        self.assertIn('storageBaseUrl: chartStorageBaseUrl(runId)', source)
+        self.assertIn('"stockscout-eod/private-charts-v1"', source)
+        self.assertIn("await copyChartShardBatch(", source)
+        self.assertIn("canonical chart manifest commit verification failed", source)
+        self.assertIn("await verifyChartRunObjects(database, destinationPrefix, committed)", source)
+        self.assertIn("legacy chart cleanup failed", source)
+        promotion = source[
+            source.index("async function promoteChartRun") : source.index(
+                "async function activeCloudRunId"
+            )
+        ]
+        self.assertLess(
+            promotion.index("const copiedShards"),
+            promotion.index(".upload(\n      destinationPath"),
+        )
+        self.assertLess(
+            promotion.index("commit verification failed"),
+            promotion.rindex("removeLegacyChartRun"),
+        )
+
+    def test_chart_cleanup_preserves_pages_and_cloud_runs(self) -> None:
+        source = FUNCTION.read_text(encoding="utf-8")
+        cleanup = source[
+            source.index("async function cleanupCloud") : source.index(
+                "async function getDeliveryState"
+            )
+        ]
+        self.assertIn('requiredString(\n    body,\n    "protectedRunId"', cleanup)
+        self.assertIn("[activeRunId, protectedRunId]", cleanup)
+        self.assertIn("!protectedRuns.has(item.name)", cleanup)
+        self.assertIn("item.name !== ownerId", cleanup)
+        self.assertIn("protectedPagesRunId: protectedRunId", cleanup)
+
+    def test_chart_promotion_workflow_is_oidc_scoped_and_publicly_verified(
+        self,
+    ) -> None:
+        source = FUNCTION.read_text(encoding="utf-8")
+        workflow = CHART_PROMOTION_WORKFLOW.read_text(encoding="utf-8")
+        eod = EOD_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("DEFAULT_CHART_PROMOTION_WORKFLOW_REF", source)
+        self.assertIn('action !== "promote_chart_run"', source)
+        self.assertIn("id-token: write", workflow)
+        self.assertIn("environment: production", workflow)
+        self.assertIn("inputs.run_id", workflow)
+        self.assertIn("python -m stockscout_eod promote-charts", workflow)
+        self.assertIn("/storage/v1/object/public/stockscout-eod-charts/", workflow)
+        self.assertIn('method="HEAD"', workflow)
+        self.assertIn("python -m stockscout_eod charts", eod)
+        self.assertIn("python -m stockscout_eod publish-charts", eod)
+        self.assertNotIn("python -m stockscout_eod private-charts", eod)
+        self.assertNotIn("python -m stockscout_eod publish-private-charts", eod)
+        self.assertGreaterEqual(eod.count("--protected-run-id"), 2)
 
     def test_oidc_delivery_resume_actions_are_owner_scoped_and_allowlisted(self) -> None:
         source = FUNCTION.read_text(encoding="utf-8")

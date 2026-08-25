@@ -18,6 +18,7 @@ from stockscout_eod.contracts import (
     AssetDescriptorV1,
     CandidateDetailV1,
     CandidateSummaryV1,
+    ChartManifestV1,
     RawScanEnvelopeV1,
     ScanCountsV1,
     ScanManifestV1,
@@ -40,6 +41,54 @@ def _descriptor(path: str, payload: bytes, count: int) -> AssetDescriptorV1:
         bytes=len(payload),
         count=count,
     )
+
+
+def _load_chart_manifest(
+    path: str | Path | None,
+    *,
+    scan: RawScanEnvelopeV1,
+    status: str,
+) -> tuple[ChartManifestV1 | None, bytes | None]:
+    if status not in {"ready", "stale", "missing"}:
+        raise ValueError("chart_status must be ready, stale, or missing")
+    if path is None:
+        if status == "ready":
+            raise ValueError("chart_status=ready requires a chart manifest")
+        return None, None
+    payload = Path(path).read_bytes()
+    manifest = ChartManifestV1.model_validate_json(payload)
+    if (
+        manifest.run_id != scan.run_id
+        or manifest.session_date != scan.session_date
+        or manifest.generated_at != scan.generated_at
+    ):
+        raise ValueError("chart manifest does not belong to the scan being published")
+    if manifest.requested != len(scan.candidates) + len(scan.excluded):
+        raise ValueError("chart manifest requested count does not match the scan")
+    if manifest.available != len(manifest.shards_by_ticker):
+        raise ValueError("chart manifest available count does not match ticker mapping")
+    storage_url = urlsplit(manifest.storage_base_url)
+    expected_suffix = (
+        f"/storage/v1/object/public/stockscout-eod-charts/{scan.run_id}"
+    )
+    if (
+        storage_url.scheme != "https"
+        or not storage_url.hostname
+        or storage_url.username
+        or storage_url.password
+        or storage_url.query
+        or storage_url.fragment
+        or not storage_url.path.endswith(expected_suffix)
+    ):
+        raise ValueError("chart manifest storage URL is not a safe public run URL")
+    shard_names = {shard.name for shard in manifest.shards}
+    if len(shard_names) != len(manifest.shards):
+        raise ValueError("chart manifest contains duplicate shard names")
+    if not set(manifest.shards_by_ticker.values()).issubset(shard_names):
+        raise ValueError("chart manifest ticker mapping references an unknown shard")
+    if status == "ready" and manifest.coverage_pct != 100.0:
+        raise ValueError("chart_status=ready requires 100% chart coverage")
+    return manifest, payload
 
 
 def _bucket(ticker: str, count: int = DETAIL_BUCKETS) -> str:
@@ -522,7 +571,8 @@ def build_public_snapshot(
     min_coverage_pct: float = 90.0,
     min_universe: int = 1000,
     allow_fixture: bool = False,
-    owner_chart_status: str = "missing",
+    chart_status: str = "missing",
+    chart_manifest: str | Path | None = None,
     public_base_url: str = DEFAULT_PUBLIC_BASE_URL,
 ) -> ScanManifestV1:
     health = evaluate_scan_health(
@@ -532,8 +582,9 @@ def build_public_snapshot(
         allow_fixture=allow_fixture,
     )
     require_healthy(health)
-    if owner_chart_status not in {"ready", "stale", "missing"}:
-        raise ValueError("owner_chart_status must be ready, stale, or missing")
+    charts, chart_manifest_bytes = _load_chart_manifest(
+        chart_manifest, scan=scan, status=chart_status
+    )
     summaries, details, excluded_rows, legacy_rows = _build_rows(
         scan, legacy_sidecar, public_base_url=public_base_url
     )
@@ -588,6 +639,12 @@ def build_public_snapshot(
                 "candidates": legacy_rows,
             },
         )
+        chart_index_bytes: bytes | None = None
+        if charts is not None and chart_manifest_bytes is not None:
+            chart_index_bytes = write_json(
+                temporary_run / "charts" / "manifest.json",
+                json.loads(chart_manifest_bytes),
+            )
 
         bucket_rows: dict[str, dict[str, Any]] = {
             f"{index:03d}": {} for index in range(DETAIL_BUCKETS)
@@ -615,6 +672,16 @@ def build_public_snapshot(
                 len(legacy_rows),
             ),
         }
+        if charts is not None and chart_index_bytes is not None:
+            assets["charts"] = AssetDescriptorV1(
+                path=f"{run_relative}/charts/manifest.json",
+                sha256=sha256_bytes(chart_index_bytes),
+                bytes=len(chart_index_bytes),
+                count=charts.available,
+                coveragePct=charts.coverage_pct,
+                pattern="shards/{bucket}.json.gz",
+                bucketCount=len(charts.shards),
+            )
         failed = int(scan.stats.get("tickers_failed_all_providers") or 0)
         universe = int(
             scan.stats.get("universe_size")
@@ -628,7 +695,7 @@ def build_public_snapshot(
             generatedAt=scan.generated_at,
             status="healthy",
             priceMode=scan.price_mode,
-            ownerChartStatus=owner_chart_status,
+            chartStatus=chart_status,
             counts=ScanCountsV1(
                 universe=universe,
                 candidates=len(summaries),
@@ -639,7 +706,10 @@ def build_public_snapshot(
             provenance={
                 **scan.provenance,
                 "publication": "github-pages-derived-snapshot",
-                "rawOhlcvPublished": False,
+                "rawOhlcvPublished": charts is not None,
+                "chartPublication": (
+                    "public-supabase-eod" if charts is not None else "unavailable"
+                ),
             },
             versions=scan.versions,
             assets=assets,
