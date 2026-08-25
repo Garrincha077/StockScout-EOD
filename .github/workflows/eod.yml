@@ -127,27 +127,30 @@ jobs:
           --config config/eod.yaml
           --output .staging/legacy-confirmation.json
 
-      - name: Build private owner chart shards
+      - name: Build public chart shards
         id: charts
         if: steps.guard.outputs.should_run == 'true'
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
         run: >-
-          python -m stockscout_eod private-charts
+          python -m stockscout_eod charts
           --input .staging/scan.json
           --config config/eod.yaml
-          --output .staging/private-charts
+          --output .staging/charts
+          --storage-base-url "${VITE_SUPABASE_URL%/}/storage/v1/object/public/stockscout-eod-charts/${{ steps.identity.outputs.run_id }}"
 
-      - name: Require 100% chart coverage for the published owner universe
+      - name: Require 100% chart coverage for the published scan universe
         if: steps.guard.outputs.should_run == 'true'
         shell: bash
         run: test "${{ steps.charts.outputs.coverage_status }}" = "ready"
 
-      - name: Publish private charts directly through OIDC
+      - name: Publish public charts directly through OIDC
         if: steps.guard.outputs.should_run == 'true'
         env:
           PUBLISH_URL: ${{ vars.STOCKSCOUT_EOD_PUBLISH_URL }}
         run: >-
-          python -m stockscout_eod publish-private-charts
-          --staging-dir .staging/private-charts
+          python -m stockscout_eod publish-charts
+          --staging-dir .staging/charts
           --run-id "${{ steps.identity.outputs.run_id }}"
           --endpoint "$PUBLISH_URL"
 
@@ -158,9 +161,10 @@ jobs:
           --input .staging/scan.json
           --public-dir frontend/public
           --legacy-sidecar .staging/legacy-confirmation.json
+          --chart-manifest .staging/charts/${{ steps.identity.outputs.run_id }}/manifest.json
           --previous-manifest "$PAGES_MANIFEST_URL"
           --public-base-url "${PAGES_APP_URL%/}"
-          --owner-chart-status ready
+          --chart-status ready
 
       - name: Verify hashes, cardinality and public allowlist
         if: steps.guard.outputs.should_run == 'true'
@@ -305,12 +309,15 @@ jobs:
           --report-link "$PAGES_APP_URL"
           --allow-notify
 
-      - name: Prune abandoned uploads and non-active private chart runs
+      - name: Prune abandoned uploads and unprotected chart runs
         if: always()
         continue-on-error: true
         env:
           PUBLISH_URL: ${{ vars.STOCKSCOUT_EOD_PUBLISH_URL }}
-        run: python -m stockscout_eod cloud-cleanup --endpoint "$PUBLISH_URL"
+        run: >-
+          python -m stockscout_eod cloud-cleanup
+          --endpoint "$PUBLISH_URL"
+          --protected-run-id "${{ needs.build.outputs.run_id }}"
 
       - name: Surface a stale ChatGPT index after Telegram has still delivered
         if: steps.pages_verify.outcome != 'success' || steps.cloud_sync.outcome != 'success'
@@ -335,11 +342,42 @@ jobs:
           cache-dependency-path: requirements.lock
       - run: python -m pip install -r requirements.lock
       - run: python -m pip install --no-deps -e .
-      - name: Remove any newly orphaned private chart run
+      - name: Resolve the currently deployed Pages run
+        id: live_pages
+        continue-on-error: true
+        env:
+          MANIFEST_URL: ${{ env.PAGES_MANIFEST_URL }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import urllib.request
+          from pathlib import Path
+
+          request = urllib.request.Request(
+              os.environ["MANIFEST_URL"],
+              headers={"Cache-Control": "no-cache", "User-Agent": "StockScout-EOD-cleanup/1.0"},
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              manifest = json.load(response)
+          run_id = str(manifest.get("runId", ""))
+          if manifest.get("status") != "healthy" or not re.fullmatch(r"[A-Za-z0-9._:-]{1,100}", run_id):
+              raise SystemExit("live Pages manifest is not a protected healthy run")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"run_id={run_id}\n")
+          PY
+
+      - name: Remove newly orphaned chart runs without touching Pages
+        if: steps.live_pages.outcome == 'success'
         continue-on-error: true
         env:
           PUBLISH_URL: ${{ vars.STOCKSCOUT_EOD_PUBLISH_URL }}
-        run: python -m stockscout_eod cloud-cleanup --endpoint "$PUBLISH_URL"
+        run: >-
+          python -m stockscout_eod cloud-cleanup
+          --endpoint "$PUBLISH_URL"
+          --protected-run-id "${{ steps.live_pages.outputs.run_id }}"
       - name: Send one deduplicated operational error
         if: needs.build.outputs.notify == 'true'
         env:

@@ -24,7 +24,6 @@ FORBIDDEN_PUBLIC_KEYS = frozenset(
         "chartpayload",
         "private_charts",
         "privatecharts",
-        "charts",
         "daily_bars",
         "weekly_bars",
         "provider_cache",
@@ -38,7 +37,7 @@ class PublicPayloadError(ValueError):
 
 
 def assert_public_safe(value: Any, *, path: str = "$") -> None:
-    """Reject credentials, local paths, raw bars, and non-finite JSON numbers."""
+    """Reject credentials, local paths, embedded provider bars, and invalid JSON."""
     if isinstance(value, Mapping):
         for key, nested in value.items():
             name = str(key)

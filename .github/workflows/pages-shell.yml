@@ -98,7 +98,12 @@ jobs:
           actual_manifest_sha256="$(sha256sum frontend/dist/data/manifest.json | cut -d' ' -f1)"
           test "$actual_manifest_sha256" = "$EXPECTED_MANIFEST_SHA256"
           grep -q '/StockScout-EOD/assets/' frontend/dist/index.html
+          entry_asset="$(grep -oE '/StockScout-EOD/assets/[^\"]+\.js' frontend/dist/index.html | head -n 1)"
+          test -n "$entry_asset"
+          entry_name="$(basename "$entry_asset")"
+          test -f "frontend/dist/${entry_asset#/StockScout-EOD/}"
           test -d frontend/dist/ticker/assets
+          test -f "frontend/dist/ticker/assets/$entry_name"
           test -f frontend/dist/ticker/assets/index-CfpEZ4tL.js
           test -f frontend/dist/sw.js
 

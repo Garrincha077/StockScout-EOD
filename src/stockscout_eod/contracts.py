@@ -1,14 +1,15 @@
 """Versioned wire contracts shared by the scanner, Pages PWA, and MCP index.
 
 The public contract is intentionally smaller than the internal ``Candidate``
-model.  Full derived candidate evidence remains available in the detail shard,
-while provider bars and operator state are forbidden from every public asset.
+model. Full derived candidate evidence remains available in the detail shard;
+the bounded chart contract is separate from candidate assets, while provider
+caches and operator state remain forbidden.
 """
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 SCHEMA_VERSION = "stockscout-eod/v1"
 MANIFEST_VERSION = 1
@@ -139,6 +140,7 @@ class AssetDescriptorV1(WireModel):
     content_type: str = Field("application/json", alias="contentType")
     pattern: str | None = None
     bucket_count: int | None = Field(None, alias="bucketCount", ge=1)
+    coverage_pct: float | None = Field(None, alias="coveragePct", ge=0, le=100)
 
 
 class ScanCountsV1(WireModel):
@@ -169,8 +171,10 @@ class ScanManifestV1(WireModel):
     generated_at: str = Field(alias="generatedAt")
     status: Literal["healthy", "degraded"]
     price_mode: Literal["split_only", "split_div"] = Field(alias="priceMode")
-    owner_chart_status: Literal["ready", "stale", "missing"] = Field(
-        "missing", alias="ownerChartStatus"
+    chart_status: Literal["ready", "stale", "missing"] = Field(
+        "missing",
+        alias="chartStatus",
+        validation_alias=AliasChoices("chartStatus", "ownerChartStatus"),
     )
     counts: ScanCountsV1
     health: HealthV1
@@ -231,16 +235,16 @@ class ChartPayloadV1(WireModel):
     weekly: list[list[int | float]] = Field(default_factory=list)
 
 
-class PrivateChartShardV1(WireModel):
+class ChartShardV1(WireModel):
     name: str
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     bytes: int = Field(ge=0)
     ticker_count: int = Field(alias="tickerCount", ge=0)
 
 
-class PrivateChartManifestV1(WireModel):
-    schema_version: Literal["stockscout-eod/private-charts-v1"] = Field(
-        "stockscout-eod/private-charts-v1", alias="schemaVersion"
+class ChartManifestV1(WireModel):
+    schema_version: Literal["stockscout-eod/charts-v1"] = Field(
+        "stockscout-eod/charts-v1", alias="schemaVersion"
     )
     run_id: str = Field(alias="runId")
     session_date: str = Field(alias="sessionDate")
@@ -249,7 +253,8 @@ class PrivateChartManifestV1(WireModel):
     requested: int = Field(ge=0)
     available: int = Field(ge=0)
     coverage_pct: float = Field(alias="coveragePct", ge=0, le=100)
-    shards: list[PrivateChartShardV1]
+    storage_base_url: str = Field(alias="storageBaseUrl")
+    shards: list[ChartShardV1]
     shards_by_ticker: dict[str, str] = Field(default_factory=dict, alias="shardsByTicker")
 
 

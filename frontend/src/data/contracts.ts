@@ -28,7 +28,6 @@ export type AssetDescriptor={
   pattern?:string
   shardCount?:number
   bucketCount?:number
-  private?:boolean
 }
 
 export type ScanHealth='healthy'|'degraded'|'failed'
@@ -42,6 +41,7 @@ export type ScanManifestV1={
   generatedAt:string
   status:ScanHealth
   priceMode:'split_only'|'split_div'|string
+  chartStatus?:'ready'|'stale'|'missing'
   ownerChartStatus?:'ready'|'stale'|'missing'
   counts:{universe:number;candidates:number;excluded:number;failed:number;total:number}
   health?:{status:ScanHealth;coveragePct:number;checks:Array<{code:string;passed:boolean;detail:string}>}

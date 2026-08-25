@@ -13,7 +13,7 @@ from stockscout_eod.artifacts import (
     load_legacy_sidecar,
     verify_public_snapshot,
 )
-from stockscout_eod.charts import build_private_chart_staging, publish_private_chart_staging
+from stockscout_eod.charts import build_chart_staging, promote_chart_run, publish_chart_staging
 from stockscout_eod.cloud_publish import (
     evaluate_cloud_alerts,
     maintain_cloud_snapshot,
@@ -116,14 +116,16 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--min-coverage", type=float, default=90.0)
     build.add_argument("--min-universe", type=int, default=1000)
     build.add_argument("--allow-fixture", action="store_true", help=argparse.SUPPRESS)
+    build.add_argument("--chart-manifest")
     build.add_argument(
-        "--owner-chart-status", choices=("ready", "stale", "missing"), default="missing"
+        "--chart-status", choices=("ready", "stale", "missing"), default="missing"
     )
 
-    charts = commands.add_parser("private-charts", help="build private gzip chart shards")
+    charts = commands.add_parser("charts", help="build compact gzip chart shards")
     charts.add_argument("--input", required=True)
     charts.add_argument("--config", default="config/eod.yaml")
-    charts.add_argument("--output", default=".staging/private-charts")
+    charts.add_argument("--output", default=".staging/charts")
+    charts.add_argument("--storage-base-url", required=True)
     charts.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
 
     legacy = commands.add_parser(
@@ -134,11 +136,17 @@ def _parser() -> argparse.ArgumentParser:
     legacy.add_argument("--output", required=True)
 
     publish_charts = commands.add_parser(
-        "publish-private-charts", help="upload private chart shards directly with GitHub OIDC"
+        "publish-charts", help="upload chart shards directly with GitHub OIDC"
     )
-    publish_charts.add_argument("--staging-dir", default=".staging/private-charts")
+    publish_charts.add_argument("--staging-dir", default=".staging/charts")
     publish_charts.add_argument("--run-id", required=True)
     publish_charts.add_argument("--endpoint", required=True)
+
+    promote_charts = commands.add_parser(
+        "promote-charts", help="promote an active legacy chart run to its public path"
+    )
+    promote_charts.add_argument("--run-id", required=True)
+    promote_charts.add_argument("--endpoint", required=True)
 
     publish_cloud = commands.add_parser(
         "publish-cloud", help="atomically publish a verified Pages snapshot with GitHub OIDC"
@@ -148,9 +156,10 @@ def _parser() -> argparse.ArgumentParser:
     publish_cloud.add_argument("--chunk-size", type=int, default=100)
 
     cleanup_cloud = commands.add_parser(
-        "cloud-cleanup", help="clean abandoned uploads and non-active private chart runs"
+        "cloud-cleanup", help="clean abandoned uploads and unprotected chart runs"
     )
     cleanup_cloud.add_argument("--endpoint", required=True)
+    cleanup_cloud.add_argument("--protected-run-id", required=True)
 
     evaluate_alerts = commands.add_parser(
         "evaluate-alerts", help="evaluate owner alerts against the active healthy EOD snapshot"
@@ -280,9 +289,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(diagnostic, sort_keys=True))
         return 0
-    if args.command == "private-charts":
-        manifest = build_private_chart_staging(
-            load_raw_scan(args.input), config_path=args.config, output_dir=args.output
+    if args.command == "charts":
+        manifest = build_chart_staging(
+            load_raw_scan(args.input),
+            config_path=args.config,
+            output_dir=args.output,
+            storage_base_url=args.storage_base_url,
         )
         coverage_status = "ready" if manifest.coverage_pct == 100.0 else "stale"
         if args.github_output:
@@ -315,13 +327,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 0
-    if args.command == "publish-private-charts":
-        manifest = publish_private_chart_staging(
+    if args.command == "publish-charts":
+        manifest = publish_chart_staging(
             staging_dir=args.staging_dir,
             run_id=args.run_id,
             endpoint=args.endpoint,
         )
         print(json.dumps({"runId": manifest.run_id, "coveragePct": manifest.coverage_pct}))
+        return 0
+    if args.command == "promote-charts":
+        print(
+            json.dumps(
+                promote_chart_run(endpoint=args.endpoint, run_id=args.run_id), sort_keys=True
+            )
+        )
         return 0
     if args.command == "publish-cloud":
         result = publish_cloud_snapshot(
@@ -332,7 +351,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(result, sort_keys=True))
         return 0
     if args.command == "cloud-cleanup":
-        print(json.dumps(maintain_cloud_snapshot(endpoint=args.endpoint), sort_keys=True))
+        print(
+            json.dumps(
+                maintain_cloud_snapshot(
+                    endpoint=args.endpoint, protected_run_id=args.protected_run_id
+                ),
+                sort_keys=True,
+            )
+        )
         return 0
     if args.command == "evaluate-alerts":
         print(json.dumps(evaluate_cloud_alerts(endpoint=args.endpoint), sort_keys=True))
@@ -416,7 +442,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             min_coverage_pct=args.min_coverage,
             min_universe=args.min_universe,
             allow_fixture=args.allow_fixture,
-            owner_chart_status=args.owner_chart_status,
+            chart_status=args.chart_status,
+            chart_manifest=args.chart_manifest,
             public_base_url=args.public_base_url,
         )
         print(json.dumps(wire_dump(manifest), sort_keys=True))

@@ -1,5 +1,6 @@
 import {createContext,useCallback,useContext,useEffect,useMemo,useState,type ReactNode} from 'react'
 import type {ReviewScope} from '../phase4Review'
+import {chartPath,chartRows,chartShard,chartShardDescriptor,publicChartManifestUrl,validateChartManifest,type ChartManifest} from './chartPayload'
 import {
   detailShardFor,isManifestV1,normalizeCore,parseManifest,
   type AssetDescriptor,type CandidateCoreV1,type CandidateDetailV1,
@@ -12,7 +13,7 @@ export type StockScoutCore=CandidateCoreV1
 export type LegacyIndex={generatedAt:string;market:Record<string,any>;layers?:Record<string,any>;universe:StockScoutRow[];[key:string]:any}
 export type ChartState=
   |{status:'ready';rows:any[]}
-  |{status:'unavailable';rows:[];reason?:'private'|'missing'}
+  |{status:'unavailable';rows:[];reason?:'missing'}
   |{status:'error';rows:[];error:string}
 
 type LoadOptions={cache?:RequestCache;force?:boolean;cacheBust?:boolean}
@@ -43,6 +44,36 @@ export class JsonPromiseCache{
 }
 
 export const sharedDataCache=new JsonPromiseCache()
+const chartShardCache=new Map<string,Promise<unknown>>()
+
+async function sha256Hex(payload:ArrayBuffer){
+  const digest=await crypto.subtle.digest('SHA-256',payload)
+  return Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('')
+}
+async function decodeGzipJson(payload:ArrayBuffer){
+  if(typeof DecompressionStream==='undefined')throw new Error('This browser cannot decompress chart data')
+  const stream=new Blob([payload]).stream().pipeThrough(new DecompressionStream('gzip'))
+  return JSON.parse(await new Response(stream).text())
+}
+function loadChartShard(manifest:ChartManifest,shard:string,retry:boolean){
+  const descriptor=chartShardDescriptor(manifest,shard)
+  if(!descriptor)return Promise.reject(new Error('Chart shard is missing from its manifest'))
+  const key=`${manifest.runId}:${shard}:${descriptor.sha256}`
+  if(retry)chartShardCache.delete(key)
+  const existing=chartShardCache.get(key)
+  if(existing)return existing
+  const request=fetch(`${chartPath(manifest,shard)}${retry?`?retry=${Date.now()}`:''}`,{cache:retry?'no-store':'default'})
+    .then(async response=>{
+      if(!response.ok)throw new Error(`Chart request failed with HTTP ${response.status}`)
+      const payload=await response.arrayBuffer()
+      if(payload.byteLength!==descriptor.bytes)throw new Error('Chart shard byte count does not match its manifest')
+      if(await sha256Hex(payload)!==descriptor.sha256)throw new Error('Chart shard hash does not match its manifest')
+      return decodeGzipJson(payload)
+    })
+    .catch(error=>{chartShardCache.delete(key);throw error})
+  chartShardCache.set(key,request)
+  return request
+}
 
 const initialPath=location.pathname
 const tickerRouteIndex=initialPath.toLowerCase().indexOf('/ticker/')
@@ -217,16 +248,34 @@ export function StockScoutDataProvider({children}:{children:ReactNode}){
   const loadChart=useCallback(async(ticker:string,retry=false):Promise<ChartState>=>{
     if(!manifest||!core)return{status:'error',rows:[],error:'Dataset is not ready'}
     const asset=manifest.assets.charts
-    if(!asset||asset.private)return{status:'unavailable',rows:[],reason:'private'}
     const normalized=ticker.trim().toUpperCase()
-    const shard=core.chartShards?.[normalized]
-    if(!shard)return{status:'unavailable',rows:[],reason:'missing'}
+    const legacyShard=core.chartShards?.[normalized]
+    if(asset&&legacyShard&&!asset.path.endsWith('manifest.json')){
+      try{
+        const rows=await sharedDataCache.load<Record<string,any[]>>(
+          `chart:${asset.sha256}:${legacyShard}`,versionedUrl(asset,`${asset.path.replace(/\/$/,'')}/${legacyShard}`),
+          {cache:retry?'no-store':'default',force:retry,cacheBust:retry},
+        )
+        return rows[normalized]?.length?{status:'ready',rows:rows[normalized]}:{status:'unavailable',rows:[],reason:'missing'}
+      }catch(nextError){return{status:'error',rows:[],error:String(nextError)}}
+    }
+    if(!isManifestV1(manifest))return{status:'unavailable',rows:[],reason:'missing'}
     try{
-      const rows=await sharedDataCache.load<Record<string,any[]>>(
-        `chart:${asset.sha256}:${shard}`,versionedUrl(asset,`${asset.path.replace(/\/$/,'')}/${shard}`),
+      const supabaseUrl=import.meta.env.VITE_SUPABASE_URL?.trim()
+      const status=manifest.chartStatus??manifest.ownerChartStatus
+      if(!asset&&status!=='ready')return{status:'unavailable',rows:[],reason:'missing'}
+      if(!asset&&!supabaseUrl)return{status:'error',rows:[],error:'Chart storage is not configured'}
+      const chartManifestUrl=asset?versionedUrl(asset):publicChartManifestUrl(supabaseUrl!,manifest.runId)
+      const raw=await sharedDataCache.load<unknown>(
+        `chart-manifest:${manifest.runId}:${asset?.sha256??'storage'}`,chartManifestUrl,
         {cache:retry?'no-store':'default',force:retry,cacheBust:retry},
       )
-      return rows[normalized]?.length?{status:'ready',rows:rows[normalized]}:{status:'unavailable',rows:[],reason:'missing'}
+      const chartManifest=validateChartManifest(raw,manifest.runId)
+      const shard=chartShard(chartManifest,normalized)
+      if(!shard)return{status:'unavailable',rows:[],reason:'missing'}
+      const payload=await loadChartShard(chartManifest,shard,retry)
+      const rows=chartRows(payload,normalized)
+      return rows?.length?{status:'ready',rows:rows as any[]}:{status:'unavailable',rows:[],reason:'missing'}
     }catch(nextError){return{status:'error',rows:[],error:String(nextError)}}
   },[manifest,core])
 

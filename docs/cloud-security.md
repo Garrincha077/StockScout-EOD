@@ -8,13 +8,14 @@ service rather than a source-only patch.
 
 ## Deployment gates
 
-1. Apply `20260822163140_stockscout_eod_cloud_security.sql` only after a schema
-   diff and Supabase security/performance advisor review. The migration seeds
+1. Apply `20260822163140_stockscout_eod_cloud_security.sql` and the later
+   `20260824213000_public_chart_bucket.sql` only after a schema diff and
+   Supabase security/performance advisor review. The initial migration seeds
    `stockscout_private.eod_owners` only when the legacy full-scan table proves
    exactly one distinct owner; more than one aborts and zero leaves it empty.
 2. Verify Auth **Allow new users to sign up** is disabled. RLS also checks the
-   private owner allowlist, so an accidental future signup still has no owner
-   state or chart access. Never authorize from `user_metadata`.
+   private owner allowlist, so an accidental future signup still has no access
+   to personal state. Never authorize from `user_metadata`.
 3. Verify `stockscout_private.eod_owners` contains exactly the same UUID as the
    exactly one legacy full-scan owner before the first publish.
 4. Deploy `stockscout-eod-publish` with `verify_jwt=false` only because it
@@ -22,6 +23,8 @@ service rather than a source-only patch.
    audience `stockscout-eod-publish`, repository
    `Garrincha077/StockScout-EOD`, protected `refs/heads/main`, workflow
    `.github/workflows/eod.yml@refs/heads/main`, and environment `production`.
+   The one-time chart promotion workflow is separately pinned and may call only
+   `promote_chart_run`.
 5. GitHub receives no Supabase secret/service-role key. It requests an OIDC
    token and calls `SUPABASE_URL/functions/v1/stockscout-eod-publish`; the Edge
    runtime alone uses its project-internal service key.
@@ -33,7 +36,7 @@ service rather than a source-only patch.
 These gates follow current Supabase guidance on [explicit Data API grants and
 RLS](https://supabase.com/docs/guides/api/securing-your-api), [RLS policy
 performance](https://supabase.com/docs/guides/database/postgres/row-level-security),
-[private Storage access](https://supabase.com/docs/guides/storage/security/access-control),
+[Storage access models](https://supabase.com/docs/guides/storage/buckets/fundamentals),
 and [custom Edge Function authentication](https://supabase.com/docs/guides/functions/auth).
 The April 2026 [Data API exposure change](https://supabase.com/changelog/45329-breaking-change-tables-not-exposed-to-data-and-graphql-api-automatically)
 is handled by explicit grants in the migration.
@@ -46,9 +49,9 @@ is handled by explicit grants in the migration.
 - `eod_watchlists`, `eod_saved_screens`, `eod_drawings`, `eod_alerts`, events,
   and delivery state require both owner allowlist membership and
   `auth.uid() = user_id`. Events and delivery markers are server-written.
-- `stockscout-eod-charts` is private. Browser reads require the owner and use
-  `{auth.uid()}/{run_id}/manifest.json` plus lazy
-  `{auth.uid()}/{run_id}/shards/{shard}.json.gz` objects.
+- `stockscout-eod-charts` is public for object retrieval only. The app uses
+  `{run_id}/manifest.json` plus lazy `{run_id}/shards/{shard}.json.gz` objects;
+  no browser policy permits listing, insert, update, move, copy, or delete.
 - `stockscout-eod-market-cache` has no browser policy. Only the OIDC publisher
   can read or write its content-hashed shards.
 - All views are `security_invoker`; all write RPCs revoke default `PUBLIC`
@@ -70,11 +73,12 @@ Every request is `POST` JSON with `Authorization: Bearer <GitHub OIDC JWT>`.
   The shared Python/Deno fixture is `jcs_fixture.json` beside the function.
 - Chart blobs use `put_blob` with kind `chart-shard` or `chart-manifest`, a
   `runId`, content SHA-256 and base64 bytes. Upload all shards and manifest
-  before activating the public scan with `finalize`.
+  before activating the public scan with `finalize`; the Pages snapshot carries
+  the matching hashed chart index, not the shard bytes.
 - `finalize` verifies count/hash and atomically swaps the active scan. It keeps
-  only current full records and up to 252 compact sessions. Call `cleanup`
-  only after successful activation; it removes uploads older than 24 hours and
-  private chart runs other than the active run.
+  only current full records and up to 252 compact sessions. `cleanup` requires
+  the Pages run ID and preserves it together with the cloud-active run before
+  pruning other canonical chart runs.
 - `delivery_get` reads the owner Telegram marker for allowlisted `digestType`
   (`daily` or `operational_error`) and `sessionDate`. `delivery_progress`
   atomically records `contentHash`, `partCount`, monotonic `lastPart`, and
@@ -147,6 +151,7 @@ npx --yes deno test ../../supabase/functions/stockscout-eod-publish/jcs_test.ts 
 ```
 
 After applying in a controlled environment, run Supabase security and
-performance advisors, test anon public reads, negative non-owner reads, owner
-CRUD, chart access, duplicate/out-of-order chunks, corrupt hashes, interrupted
+performance advisors, test anonymous chart GET plus denied listing/writes,
+negative non-owner personal-state reads, owner CRUD, duplicate/out-of-order
+chunks, corrupt hashes, interrupted
 uploads, atomic activation, and exactly-252-session retention.

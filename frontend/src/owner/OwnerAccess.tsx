@@ -45,7 +45,7 @@ export default function OwnerAccess(){
         <button className="owner-link-button" type="button" onClick={()=>{setResetMode(false);setResetSent(false)}}>Back to sign in</button>
       </form>
       :<form className="owner-popover" onSubmit={submit}>
-        <b>Owner access</b><p>Private charts, synced watchlists, drawings and alerts.</p>
+        <b>Owner access</b><p>Synced watchlists, drawings and alerts. Charts are always available.</p>
         <label>Email<input type="email" autoComplete="username" required value={email} onChange={event=>setEmail(event.target.value)}/></label>
         <label>Password<input type="password" autoComplete="current-password" required value={password} onChange={event=>setPassword(event.target.value)}/></label>
         {error&&<small role="alert">{error}</small>}

@@ -33,6 +33,7 @@ UUID_RE = re.compile(
 )
 TICKER_RE = re.compile(r"^[A-Z0-9._-]{1,20}$")
 FIELD_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$")
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,100}$")
 SAFE_JS_INTEGER = 9_007_199_254_740_991
 _MISSING = object()
 
@@ -551,14 +552,23 @@ def publish_cloud_snapshot(
 
 
 def maintain_cloud_snapshot(
-    *, endpoint: str, audience: str = AUDIENCE
+    *, endpoint: str, protected_run_id: str, audience: str = AUDIENCE
 ) -> Mapping[str, Any]:
-    """Remove abandoned uploads and every non-active private chart run."""
+    """Remove abandoned uploads and chart runs not used by cloud or Pages."""
     parts = urlsplit(endpoint)
     if parts.scheme != "https" or not parts.netloc:
         raise CloudPublishError("cloud publish endpoint must be HTTPS")
+    if not RUN_ID_RE.fullmatch(protected_run_id):
+        raise CloudPublishError("protected chart run ID is invalid")
     token = github_oidc_token(audience)
-    return _data(post_json_with_retry(endpoint, token, {"action": "cleanup"}), "cleanup")
+    return _data(
+        post_json_with_retry(
+            endpoint,
+            token,
+            {"action": "cleanup", "protectedRunId": protected_run_id},
+        ),
+        "cleanup",
+    )
 
 
 def evaluate_cloud_alerts(
