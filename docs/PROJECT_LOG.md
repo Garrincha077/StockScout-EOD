@@ -249,3 +249,14 @@
 - Added a regression test for the HTTP error path. The focused chart tests and
   Ruff pass; this is diagnostics-only and does not change chart data, scan
   output, ranking, detector or trade-plan behavior.
+
+## 2026-09-03 — MCP fast-uri security maintenance
+
+- Updated the StockScout MCP lockfile from `fast-uri` 3.1.5 to 3.1.7 to pick up
+  the upstream high-severity URI parsing and host-validation security fixes.
+- This is dependency maintenance only; no StockScout product behavior, scoring,
+  ranking, signal logic, market-data semantics, alert policy, API usage/costs,
+  or architecture is changed.
+- Validation on GitHub Actions CI run `33712962164`: `cd services/stockscout_mcp
+  && npm ci && npm test && npm audit --audit-level=high` completed successfully;
+  the full CI workflow and CodeQL run for commit `fe51c0728b` were green.
