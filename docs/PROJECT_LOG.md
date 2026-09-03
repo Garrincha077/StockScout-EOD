@@ -260,3 +260,9 @@
 - Validation on GitHub Actions CI run `33712962164`: `cd services/stockscout_mcp
   && npm ci && npm test && npm audit --audit-level=high` completed successfully;
   the full CI workflow and CodeQL run for commit `fe51c0728b` were green.
+
+## 2026-09-03 — MCP qs dependency maintenance
+
+- Updated the StockScout MCP lockfile from `qs` 6.15.3 to 6.16.0 through the existing Dependabot PR.
+- This is dependency maintenance only; no StockScout product behavior, scoring, ranking, signal logic, market-data semantics, alert policy, API usage/costs, or architecture is changed.
+- Validation before the documentation commit: GitHub Actions CI run `33748029079` and CodeQL run `33748029904` both completed successfully on dependency commit `f2f6510996657ed92158f07d938f4d9b6390e605`. A fresh CI/CodeQL run and fresh review on the updated PR head remain required before merge.
