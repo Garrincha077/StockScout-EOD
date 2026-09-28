@@ -266,3 +266,24 @@
 - Updated the StockScout MCP lockfile from `qs` 6.15.3 to 6.16.0 through the existing Dependabot PR.
 - This is dependency maintenance only; no StockScout product behavior, scoring, ranking, signal logic, market-data semantics, alert policy, API usage/costs, or architecture is changed.
 - Validation before the documentation commit: GitHub Actions CI run `33748029079` and CodeQL run `33748029904` both completed successfully on dependency commit `f2f6510996657ed92158f07d938f4d9b6390e605`. A fresh CI/CodeQL run and fresh review on the updated PR head remain required before merge.
+
+## 2026-09-28 — Retire legacy EOD scheduler and Supabase market cache
+
+- Production ownership is now `Garrincha077/StockScout-Unified`. The legacy
+  `StockScout-EOD` workflow is manual-only; its 20:45/21:45 UTC schedules were
+  removed so it cannot continue restoring the retired Supabase market cache.
+- Supabase logs tied repeated ~271 MB cache restores to the old repository's
+  scheduled runs. The legacy `stockscout-eod-publish` Edge Function was replaced
+  by a retired endpoint, and the `stockscout-eod-market-cache` bucket was emptied
+  to 0 objects / 0 bytes. The bucket record may remain as inert metadata.
+- Enabled RLS on `stockscout_next_telegram_connections`,
+  `stockscout_next_alert_sync_profiles`, and
+  `stockscout_next_alert_device_links`. Their public API path remains through
+  existing `SECURITY DEFINER` RPCs owned by `postgres`, so the alert/sync contract
+  is unchanged.
+- The latest Trend Birth GridView failure from 2026-09-26 was a deployment race;
+  current Unified main already treats `PublicationPending` as a deferred success,
+  so no duplicate alert patch was applied here.
+- Validation before this documentation-only follow-up: CI run `36392807999` and
+  CodeQL run `36392808049` were green on the retirement workflow change. Branch
+  protection remains the final merge gate after these documentation updates.
