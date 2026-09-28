@@ -37,16 +37,17 @@ and EOD alerts.
 
 ## Production workflow
 
-GitHub Actions tries at 20:45 and 21:45 UTC on weekdays. An NYSE calendar guard
-selects the first attempt after a completed US session and skips weekends,
-holidays, early-close timing mistakes, and an already active session. A healthy
-run builds one immutable snapshot for Pages, Supabase/MCP, alerts, and Telegram;
-an unhealthy run leaves the previous snapshot live.
+Production scheduling has moved to
+[`Garrincha077/StockScout-Unified`](https://github.com/Garrincha077/StockScout-Unified).
+The Unified EOD workflow is the canonical operator for scans, publication,
+charts, alerts, and Telegram. This repository is retained only as a historical
+fallback; its EOD workflow is manual-only and its legacy Supabase market-cache
+publisher is retired.
 
-Scheduled Telegram delivery intentionally stays disabled through the five-session
-parallel cutover. A manual workflow dispatch also defaults to `notify=false`.
-See [operations and cutover](docs/OPERATIONS.md) for the exact commands and
-activation gates.
+For recovery or backfill, dispatch `eod.yml` in `StockScout-Unified` with
+`notify=false` unless an intentional Telegram delivery is required. See
+[operations and cutover](docs/OPERATIONS.md) for the current command and safety
+gates.
 
 ## Local verification
 
