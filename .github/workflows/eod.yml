@@ -1,9 +1,7 @@
 name: StockScout EOD
 
 on:
-  schedule:
-    - cron: "45 20 * * 1-5"
-    - cron: "45 21 * * 1-5"
+  # Legacy fallback only. Production scheduling moved to StockScout-Unified.
   workflow_dispatch:
     inputs:
       scan_date:

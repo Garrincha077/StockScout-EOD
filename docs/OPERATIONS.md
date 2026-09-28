@@ -2,34 +2,34 @@
 
 ## What runs without the local computer
 
-The `StockScout EOD` GitHub workflow is the production operator. It restores a
-private content-addressed market cache, obtains EOD data, runs the frozen
-StockScout engine, executes Ryan/LEGACY as a shadow-only confirmation, verifies
-the scan, builds public read-only chart shards and derived Pages assets,
-deploys GitHub Pages, atomically activates Supabase/MCP, evaluates supported
-owner alerts, and optionally sends the resumable multipart Telegram digest.
+Production moved to `Garrincha077/StockScout-Unified`. Its `StockScout Unified
+EOD` workflow is the canonical scheduled operator for scans, publication,
+charts, owner alerts, Telegram delivery, and current cache handling.
 
-The workflow has two weekday schedules, at 20:45 and 21:45 UTC. The exchange
-calendar and active-run ledger decide whether either attempt may run. Only
-`main` and the protected `production` environment can obtain the custom GitHub
-OIDC token accepted by the Supabase Edge Function.
+This repository is retained as a historical fallback only. Its `StockScout EOD`
+workflow has no schedule and must not be used as the production operator. The
+legacy Supabase publisher and private market-cache path were retired on
+2026-09-28 after they were identified as the source of repeated egress.
 
 ## Safe manual run
 
-A manual run defaults to no outward notification. Use a completed NYSE session:
+Run production recovery/backfill from the Unified repository. A manual run
+defaults to no outward notification:
 
 ```powershell
 gh workflow run eod.yml `
-  --repo Garrincha077/StockScout-EOD `
+  --repo Garrincha077/StockScout-Unified `
   --ref main `
-  -f scan_date=2026-08-21 `
+  -f scan_date=2026-09-25 `
   -f notify=false `
-  -f force=false
+  -f force_full_refresh=false `
+  -f reuse_existing=false
 ```
 
-Use `force=true` only to deliberately rebuild an already active session. Use
-`notify=true` only after checking the generated digest and when a real Telegram
-delivery is intended. Test and fixture scans always use `--no-notify`.
+Use `notify=true` only when a real Telegram delivery is intended. Use
+`force_full_refresh=true` only when the Next fundamentals cache must be
+deliberately refreshed, and `reuse_existing=true` only to republish an already
+verified session without running the scanners again.
 
 ## Failure behavior
 
